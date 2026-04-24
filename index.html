@@ -134,14 +134,46 @@
 
             <section id="tab-settings" class="tab-content">
                 <div class="character-card">
-                    <div class="section-title">위고비 표준 증량</div>
-                    <div class="schedule-grid">
-                        <div><strong>1-4주</strong><span>0.25mg</span></div>
-                        <div><strong>5-8주</strong><span>0.5mg</span></div>
-                        <div><strong>9-12주</strong><span>1.0mg</span></div>
-                        <div><strong>13-16주</strong><span>1.7mg</span></div>
-                        <div><strong>17주+</strong><span>2.4mg</span></div>
+                    <div class="tab-header">
+                        <div class="section-title">위고비 표준 증량</div>
+                        <span class="chip">9.6mg / 3mL 기준</span>
                     </div>
+                    <div class="schedule-grid">
+                        <div><strong>1-4주</strong><span>0.25mg</span><small>0.078mL</small></div>
+                        <div><strong>5-8주</strong><span>0.5mg</span><small>0.156mL</small></div>
+                        <div><strong>9-12주</strong><span>1.0mg</span><small>0.313mL</small></div>
+                        <div><strong>13-16주</strong><span>1.7mg</span><small>0.531mL</small></div>
+                        <div><strong>17주+</strong><span>2.4mg</span><small>0.750mL</small></div>
+                    </div>
+                </div>
+
+                <div class="character-card">
+                    <div class="tab-header">
+                        <div>
+                            <div class="section-title">위고비 9.6mg / 3mL 카트리지</div>
+                            <div class="section-subtitle">1mL = 3.2mg 기준으로 남은 mg와 mL를 함께 추적합니다</div>
+                        </div>
+                        <button id="add-cartridge-btn" class="add-button">+ 추가</button>
+                    </div>
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <div class="stat-label">등록 카트리지</div>
+                            <div class="stat-value" id="cartridge-total-count">0</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">사용 중</div>
+                            <div class="stat-value" id="cartridge-active-count">0</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">총 남은 mg</div>
+                            <div class="stat-value" id="cartridge-remaining-mg">0.0</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">총 남은 mL</div>
+                            <div class="stat-value" id="cartridge-remaining-ml">0.000</div>
+                        </div>
+                    </div>
+                    <div id="cartridge-list" class="list-container"></div>
                 </div>
 
                 <div class="character-card">
@@ -195,17 +227,24 @@
                 <div class="form-group">
                     <label class="form-label" for="dose-amount">투약량</label>
                     <select id="dose-amount" class="form-input" required>
-                        <option value="0.25">0.25mg</option>
-                        <option value="0.5">0.5mg</option>
-                        <option value="1">1.0mg</option>
-                        <option value="1.7">1.7mg</option>
-                        <option value="2.4">2.4mg</option>
+                        <option value="0.25">0.25mg (0.078mL)</option>
+                        <option value="0.5">0.5mg (0.156mL)</option>
+                        <option value="1">1.0mg (0.313mL)</option>
+                        <option value="1.7">1.7mg (0.531mL)</option>
+                        <option value="2.4">2.4mg (0.750mL)</option>
                         <option value="custom">직접 입력</option>
                     </select>
                 </div>
                 <div id="custom-dose-group" class="form-group hidden">
                     <label class="form-label" for="custom-dose">직접 입력 용량 (mg)</label>
                     <input type="number" id="custom-dose" class="form-input" min="0.01" max="10" step="0.01" placeholder="예: 0.75">
+                </div>
+                <div id="dose-volume-info" class="preview-box"></div>
+                <div class="form-group">
+                    <label class="form-label" for="dose-cartridge">카트리지 연결</label>
+                    <select id="dose-cartridge" class="form-input">
+                        <option value="">연결 안 함</option>
+                    </select>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="dose-site">투약 부위</label>
@@ -244,6 +283,33 @@
                 </div>
                 <div id="bulk-preview" class="preview-box"></div>
                 <button type="submit" class="action-button">표준 스케줄로 추가</button>
+                <button type="button" class="action-button cancel" data-close-modal>취소</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="cartridge-modal" class="modal" aria-hidden="true">
+        <div class="modal-content">
+            <div id="cartridge-modal-title" class="modal-title">카트리지 추가</div>
+            <form id="cartridge-form">
+                <input type="hidden" id="cartridge-id">
+                <div class="form-group">
+                    <label class="form-label" for="cartridge-name">이름</label>
+                    <input type="text" id="cartridge-name" class="form-input" placeholder="예: 4월 카트리지" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="cartridge-opened-date">개봉일</label>
+                    <input type="date" id="cartridge-opened-date" class="form-input" required>
+                </div>
+                <div class="preview-box">
+                    고정 규격: 9.6mg / 3mL<br>
+                    나눠맞기 계산 기준: 1mL = 3.2mg
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="cartridge-notes">메모</label>
+                    <textarea id="cartridge-notes" class="form-input" rows="3" placeholder="개봉 상태, 보관, 주사기 메모 등"></textarea>
+                </div>
+                <button type="submit" class="action-button">저장</button>
                 <button type="button" class="action-button cancel" data-close-modal>취소</button>
             </form>
         </div>

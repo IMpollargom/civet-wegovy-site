@@ -2,9 +2,13 @@ const STORAGE_KEY = 'civet-wegovy-tracker-v1';
 const HALF_LIFE_DAYS = 7;
 const HALF_LIFE_MS = HALF_LIFE_DAYS * 24 * 60 * 60 * 1000;
 const WEGOVY_DOSES = [0.25, 0.5, 1, 1.7, 2.4];
+const CARTRIDGE_TOTAL_MG = 9.6;
+const CARTRIDGE_TOTAL_ML = 3;
+const MG_PER_ML = CARTRIDGE_TOTAL_MG / CARTRIDGE_TOTAL_ML;
 
 const state = {
     doses: [],
+    cartridges: [],
     logs: [],
     activeTab: 'home',
     logFilter: 'all',
@@ -36,22 +40,35 @@ function setupEvents() {
         const deleteDoseButton = event.target.closest('[data-delete-dose]');
         const editLogButton = event.target.closest('[data-edit-log]');
         const deleteLogButton = event.target.closest('[data-delete-log]');
+        const editCartridgeButton = event.target.closest('[data-edit-cartridge]');
+        const deleteCartridgeButton = event.target.closest('[data-delete-cartridge]');
+        const useCartridgeButton = event.target.closest('[data-use-cartridge]');
 
         if (editDoseButton) editDose(editDoseButton.dataset.editDose);
         if (deleteDoseButton) deleteDose(deleteDoseButton.dataset.deleteDose);
         if (editLogButton) editLog(editLogButton.dataset.editLog);
         if (deleteLogButton) deleteLog(deleteLogButton.dataset.deleteLog);
+        if (editCartridgeButton) editCartridge(editCartridgeButton.dataset.editCartridge);
+        if (deleteCartridgeButton) deleteCartridge(deleteCartridgeButton.dataset.deleteCartridge);
+        if (useCartridgeButton) openDoseModal(null, useCartridgeButton.dataset.useCartridge);
     });
 
     document.getElementById('add-dose-btn').addEventListener('click', () => openDoseModal());
     document.getElementById('bulk-dose-btn').addEventListener('click', openBulkModal);
     document.getElementById('add-log-btn').addEventListener('click', () => openLogModal('side_effect'));
+    document.getElementById('add-cartridge-btn').addEventListener('click', () => openCartridgeModal());
 
     document.getElementById('dose-form').addEventListener('submit', saveDoseFromForm);
     document.getElementById('bulk-form').addEventListener('submit', saveBulkDoses);
     document.getElementById('log-form').addEventListener('submit', saveLogFromForm);
+    document.getElementById('cartridge-form').addEventListener('submit', saveCartridgeFromForm);
 
-    document.getElementById('dose-amount').addEventListener('change', updateCustomDoseVisibility);
+    document.getElementById('dose-amount').addEventListener('change', () => {
+        updateCustomDoseVisibility();
+        updateDoseVolumeInfo();
+    });
+    document.getElementById('custom-dose').addEventListener('input', updateDoseVolumeInfo);
+    document.getElementById('dose-cartridge').addEventListener('change', updateDoseVolumeInfo);
     document.getElementById('log-intensity').addEventListener('input', (event) => {
         document.getElementById('log-intensity-label').textContent = event.target.value;
     });
@@ -89,10 +106,12 @@ function loadState() {
     try {
         const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
         state.doses = Array.isArray(saved.doses) ? saved.doses : [];
+        state.cartridges = Array.isArray(saved.cartridges) ? saved.cartridges : [];
         state.logs = Array.isArray(saved.logs) ? saved.logs : [];
     } catch (error) {
         console.error(error);
         state.doses = [];
+        state.cartridges = [];
         state.logs = [];
     }
 }
@@ -100,6 +119,7 @@ function loadState() {
 function persistState() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
         doses: state.doses,
+        cartridges: state.cartridges,
         logs: state.logs
     }));
 }
@@ -112,6 +132,7 @@ function refreshAll() {
     });
     renderHome();
     renderDoses();
+    renderCartridges();
     renderLogs();
     renderRangeSummary();
     updateChart();
@@ -158,7 +179,7 @@ function renderHome() {
 
     document.getElementById('home-last-updated').textContent =
         `마지막 ${formatDateTime(lastDate)} · 다음 ${formatDateTime(nextDate)}`;
-    document.getElementById('current-dose').textContent = `${formatDose(lastDose.amount)}mg`;
+    document.getElementById('current-dose').textContent = `${formatDose(lastDose.amount)} / ${formatMl(doseToMl(lastDose.amount))}`;
     document.getElementById('next-dose-days').textContent = dayText;
     document.getElementById('home-insight').innerHTML = buildHomeInsight(lastDose, concentration, nextDate);
 }
@@ -177,6 +198,18 @@ function emptyInsight() {
 }
 
 function buildHomeInsight(lastDose, concentration, nextDate) {
+    const currentCartridge = getCurrentCartridge();
+    const cartridgeInsight = currentCartridge
+        ? (() => {
+            const usage = getCartridgeUsage(currentCartridge);
+            return `
+                <div class="insight-row">
+                    <span>현재 카트리지</span>
+                    <strong>${escapeHtml(currentCartridge.name)} · ${formatDose(usage.remainingMg)}mg / ${formatMl(usage.remainingMl)}mL</strong>
+                </div>
+            `;
+        })()
+        : '';
     const latestLogs = [...state.logs]
         .sort((a, b) => new Date(b.datetime) - new Date(a.datetime))
         .slice(0, 1);
@@ -187,7 +220,7 @@ function buildHomeInsight(lastDose, concentration, nextDate) {
     return `
         <div class="insight-row">
             <span>마지막 용량</span>
-            <strong>${formatDose(lastDose.amount)}mg · ${lastDose.site || '부위 미기록'}</strong>
+            <strong>${formatDose(lastDose.amount)}mg / ${formatMl(doseToMl(lastDose.amount))}mL · ${lastDose.site || '부위 미기록'}</strong>
         </div>
         <div class="insight-row">
             <span>다음 예정</span>
@@ -197,6 +230,7 @@ function buildHomeInsight(lastDose, concentration, nextDate) {
             <span>추정 잔존량</span>
             <strong>${concentration.toFixed(2)}mg</strong>
         </div>
+        ${cartridgeInsight}
         <div class="insight-row">
             <span>최근 기록</span>
             <strong>${escapeHtml(logText)}</strong>
@@ -223,6 +257,8 @@ function renderDoses() {
         const intervalText = previous
             ? `${Math.round((new Date(dose.datetime) - new Date(previous.datetime)) / (24 * 60 * 60 * 1000))}일 간격`
             : '첫 기록';
+        const cartridge = dose.cartridgeId ? getCartridgeById(dose.cartridgeId) : null;
+        const doseMl = doseToMl(dose.amount);
 
         return `
             <article class="list-item">
@@ -230,9 +266,9 @@ function renderDoses() {
                     <div class="item-date">${formatDateTime(new Date(dose.datetime))}</div>
                     <div class="item-title-row">
                         <span class="item-title">${formatDose(dose.amount)}mg</span>
-                        <span class="status-badge">${intervalText}</span>
+                        <span class="status-badge">${formatMl(doseMl)}mL</span>
                     </div>
-                    <div class="item-meta">${dose.site || '부위 미기록'} · 해당 시점 농도 ${getConcentrationAt(new Date(dose.datetime)).toFixed(2)}mg</div>
+                    <div class="item-meta">${intervalText} · ${dose.site || '부위 미기록'} · ${cartridge ? `${escapeHtml(cartridge.name)} 연결` : '카트리지 미연결'} · 당시 농도 ${getConcentrationAt(new Date(dose.datetime)).toFixed(2)}mg</div>
                     ${dose.notes ? `<div class="item-notes">${escapeHtml(dose.notes)}</div>` : ''}
                 </div>
                 <div class="item-actions">
@@ -312,7 +348,115 @@ function renderRangeSummary() {
     `).join('');
 }
 
-function openDoseModal(dose = null) {
+function renderCartridges() {
+    const container = document.getElementById('cartridge-list');
+    const cartridges = getSortedCartridges();
+    const activeCartridges = cartridges.filter((cartridge) => getCartridgeUsage(cartridge).remainingMg > 0.000001);
+    const totalRemainingMg = cartridges.reduce((sum, cartridge) => sum + getCartridgeUsage(cartridge).remainingMg, 0);
+    const totalRemainingMl = cartridges.reduce((sum, cartridge) => sum + getCartridgeUsage(cartridge).remainingMl, 0);
+
+    document.getElementById('cartridge-total-count').textContent = cartridges.length;
+    document.getElementById('cartridge-active-count').textContent = activeCartridges.length;
+    document.getElementById('cartridge-remaining-mg').textContent = formatDose(totalRemainingMg);
+    document.getElementById('cartridge-remaining-ml').textContent = formatMl(totalRemainingMl);
+
+    if (!cartridges.length) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <strong>등록된 카트리지가 없습니다</strong><br>
+                9.6mg / 3mL 카트리지를 추가하면 투약 때마다 남은 mg와 mL가 자동 계산됩니다
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = cartridges.map((cartridge) => {
+        const usage = getCartridgeUsage(cartridge);
+        const isEmpty = usage.remainingMg <= 0.000001;
+        const statusText = isEmpty ? '소진됨' : `${usage.linkedDoseCount}회 연결`;
+
+        return `
+            <article class="list-item">
+                <div class="item-main">
+                    <div class="item-date">개봉 ${formatDateOnly(new Date(cartridge.openedDate))}</div>
+                    <div class="item-title-row">
+                        <span class="item-title">${escapeHtml(cartridge.name)}</span>
+                        <span class="status-badge">${statusText}</span>
+                    </div>
+                    <div class="item-meta">남은 용량 ${formatDose(usage.remainingMg)}mg / ${formatMl(usage.remainingMl)}mL · 사용 ${usage.usagePercent.toFixed(0)}%</div>
+                    <div class="cartridge-meta-grid">
+                        <div class="cartridge-meta">
+                            <div class="cartridge-meta-label">총 규격</div>
+                            <div class="cartridge-meta-value">${CARTRIDGE_TOTAL_MG}mg / ${formatMl(CARTRIDGE_TOTAL_ML)}mL</div>
+                        </div>
+                        <div class="cartridge-meta">
+                            <div class="cartridge-meta-label">연결 투약</div>
+                            <div class="cartridge-meta-value">${usage.linkedDoseCount}건</div>
+                        </div>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" data-progress="${usage.usagePercent}"></div>
+                    </div>
+                    ${cartridge.notes ? `<div class="item-notes">${escapeHtml(cartridge.notes)}</div>` : ''}
+                </div>
+                <div class="item-actions">
+                    <button class="item-edit" data-use-cartridge="${cartridge.id}">투약</button>
+                    <button class="item-edit" data-edit-cartridge="${cartridge.id}">수정</button>
+                    <button class="item-delete" data-delete-cartridge="${cartridge.id}">삭제</button>
+                </div>
+            </article>
+        `;
+    }).join('');
+
+    container.querySelectorAll('.progress-fill').forEach((fill) => {
+        fill.style.width = `${fill.dataset.progress}%`;
+    });
+}
+
+function getSortedCartridges() {
+    return [...state.cartridges].sort((a, b) => {
+        const aUsage = getCartridgeUsage(a);
+        const bUsage = getCartridgeUsage(b);
+        const aActive = aUsage.remainingMg > 0.000001;
+        const bActive = bUsage.remainingMg > 0.000001;
+        if (aActive !== bActive) return aActive ? -1 : 1;
+        return new Date(b.openedDate) - new Date(a.openedDate);
+    });
+}
+
+function getCartridgeById(id) {
+    return state.cartridges.find((cartridge) => cartridge.id === id) || null;
+}
+
+function getCartridgeUsage(cartridge, excludedDoseId = '') {
+    const linkedDoses = state.doses.filter((dose) => dose.cartridgeId === cartridge.id && dose.id !== excludedDoseId);
+    const usedMg = linkedDoses.reduce((sum, dose) => sum + Number(dose.amount || 0), 0);
+    const usedMl = linkedDoses.reduce((sum, dose) => sum + doseToMl(Number(dose.amount || 0)), 0);
+    const remainingMg = Math.max(0, CARTRIDGE_TOTAL_MG - usedMg);
+    const remainingMl = Math.max(0, CARTRIDGE_TOTAL_ML - usedMl);
+    const usagePercent = Math.min(100, (usedMl / CARTRIDGE_TOTAL_ML) * 100);
+
+    return {
+        linkedDoseCount: linkedDoses.length,
+        usedMg,
+        usedMl,
+        remainingMg,
+        remainingMl,
+        usagePercent
+    };
+}
+
+function getCurrentCartridge() {
+    const lastLinkedDose = getSortedDoses().find((dose) => dose.cartridgeId && getCartridgeById(dose.cartridgeId));
+    if (lastLinkedDose) {
+        const candidate = getCartridgeById(lastLinkedDose.cartridgeId);
+        if (candidate) return candidate;
+    }
+
+    return getSortedCartridges()[0] || null;
+}
+
+function openDoseModal(dose = null, preferredCartridgeId = '') {
     document.getElementById('dose-form').reset();
     document.getElementById('dose-id').value = dose?.id || '';
     document.getElementById('dose-modal-title').textContent = dose ? '투약 기록 수정' : '투약 기록 추가';
@@ -330,7 +474,9 @@ function openDoseModal(dose = null) {
         document.getElementById('dose-amount').value = getLikelyNextDose();
     }
 
+    renderDoseCartridgeOptions(dose?.cartridgeId || preferredCartridgeId || getDefaultCartridgeId());
     updateCustomDoseVisibility();
+    updateDoseVolumeInfo();
     openModal('dose-modal');
 }
 
@@ -348,10 +494,25 @@ function saveDoseFromForm(event) {
         return;
     }
 
+    const cartridgeId = document.getElementById('dose-cartridge').value;
+    if (cartridgeId) {
+        const cartridge = getCartridgeById(cartridgeId);
+        if (!cartridge) {
+            showToast('선택한 카트리지를 찾을 수 없습니다');
+            return;
+        }
+        const usage = getCartridgeUsage(cartridge, id);
+        if (amount - usage.remainingMg > 0.000001) {
+            showToast('선택한 카트리지 잔량보다 투약량이 큽니다');
+            return;
+        }
+    }
+
     const dose = {
         id,
         datetime: new Date(document.getElementById('dose-date').value).toISOString(),
         amount,
+        cartridgeId,
         site: document.getElementById('dose-site').value,
         notes: document.getElementById('dose-notes').value.trim()
     };
@@ -404,7 +565,7 @@ function updateBulkPreview() {
     const lastDose = doseForWeek(weeks - 1);
     preview.innerHTML = `
         총 ${weeks}회가 7일 간격으로 추가됩니다.<br>
-        시작 ${start} · 마지막 예상 용량 ${formatDose(lastDose)}mg
+        시작 ${start} · 마지막 예상 용량 ${formatDose(lastDose)}mg (${formatMl(doseToMl(lastDose))}mL)
     `;
 }
 
@@ -430,6 +591,7 @@ function saveBulkDoses(event) {
                 id: createId(),
                 datetime: date.toISOString(),
                 amount,
+                cartridgeId: '',
                 site: '복부',
                 notes: '표준 증량 스케줄로 입력'
             });
@@ -441,6 +603,120 @@ function saveBulkDoses(event) {
     closeModals();
     refreshAll();
     showToast(`${created.length}개의 과거 기록을 추가했습니다`);
+}
+
+function openCartridgeModal(cartridge = null) {
+    document.getElementById('cartridge-form').reset();
+    document.getElementById('cartridge-id').value = cartridge?.id || '';
+    document.getElementById('cartridge-modal-title').textContent = cartridge ? '카트리지 수정' : '카트리지 추가';
+    document.getElementById('cartridge-name').value = cartridge?.name || `카트리지 ${state.cartridges.length + 1}`;
+    document.getElementById('cartridge-opened-date').value = cartridge?.openedDate || toDateInput(new Date());
+    document.getElementById('cartridge-notes').value = cartridge?.notes || '';
+    openModal('cartridge-modal');
+}
+
+function saveCartridgeFromForm(event) {
+    event.preventDefault();
+
+    const id = document.getElementById('cartridge-id').value || createId();
+    const cartridge = {
+        id,
+        name: document.getElementById('cartridge-name').value.trim(),
+        openedDate: document.getElementById('cartridge-opened-date').value,
+        notes: document.getElementById('cartridge-notes').value.trim()
+    };
+
+    const index = state.cartridges.findIndex((item) => item.id === id);
+    if (index >= 0) {
+        state.cartridges[index] = cartridge;
+    } else {
+        state.cartridges.push(cartridge);
+    }
+
+    persistState();
+    closeModals();
+    refreshAll();
+    showToast('카트리지가 저장되었습니다');
+}
+
+function editCartridge(id) {
+    const cartridge = getCartridgeById(id);
+    if (cartridge) openCartridgeModal(cartridge);
+}
+
+function deleteCartridge(id) {
+    const usage = getCartridgeById(id) ? getCartridgeUsage(getCartridgeById(id)) : null;
+    const linkedCount = usage?.linkedDoseCount || 0;
+    const message = linkedCount
+        ? `이 카트리지를 삭제하면 연결된 투약 ${linkedCount}건의 카트리지 연결이 해제됩니다. 계속할까요?`
+        : '이 카트리지를 삭제할까요?';
+
+    if (!confirm(message)) return;
+
+    state.doses = state.doses.map((dose) => (
+        dose.cartridgeId === id ? { ...dose, cartridgeId: '' } : dose
+    ));
+    state.cartridges = state.cartridges.filter((cartridge) => cartridge.id !== id);
+
+    persistState();
+    refreshAll();
+    showToast('카트리지를 삭제했습니다');
+}
+
+function renderDoseCartridgeOptions(selectedId = '') {
+    const select = document.getElementById('dose-cartridge');
+    const currentDoseId = document.getElementById('dose-id').value;
+    const options = [
+        '<option value="">연결 안 함</option>',
+        ...getSortedCartridges().map((cartridge) => {
+            const usage = getCartridgeUsage(cartridge, currentDoseId);
+            const selected = selectedId === cartridge.id ? ' selected' : '';
+            return `<option value="${cartridge.id}"${selected}>${escapeHtml(cartridge.name)} · ${formatDose(usage.remainingMg)}mg / ${formatMl(usage.remainingMl)}mL 남음</option>`;
+        })
+    ];
+    select.innerHTML = options.join('');
+}
+
+function updateDoseVolumeInfo() {
+    const preview = document.getElementById('dose-volume-info');
+    const amount = getDoseFormAmount();
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+        preview.innerHTML = '용량을 선택하면 이번 투약의 mL와 카트리지 차감량이 표시됩니다';
+        return;
+    }
+
+    const doseMl = doseToMl(amount);
+    const cartridgeId = document.getElementById('dose-cartridge').value;
+    const currentDoseId = document.getElementById('dose-id').value;
+    const lines = [`이번 투약: ${formatDose(amount)}mg = ${formatMl(doseMl)}mL`];
+
+    if (cartridgeId) {
+        const cartridge = getCartridgeById(cartridgeId);
+        if (cartridge) {
+            const usage = getCartridgeUsage(cartridge, currentDoseId);
+            const remainingAfterMg = usage.remainingMg - amount;
+            const remainingAfterMl = usage.remainingMl - doseMl;
+            lines.push(`저장 후 예상 잔량: ${formatDose(Math.max(remainingAfterMg, 0))}mg / ${formatMl(Math.max(remainingAfterMl, 0))}mL`);
+            if (remainingAfterMg < -0.000001) {
+                lines.push('선택한 카트리지 잔량보다 큽니다');
+            }
+        }
+    } else if (state.cartridges.length) {
+        lines.push('카트리지를 연결하면 남은 mg와 mL가 자동으로 차감됩니다');
+    } else {
+        lines.push('설정 탭에서 카트리지를 추가하면 나눠맞기 추적이 됩니다');
+    }
+
+    preview.innerHTML = lines.join('<br>');
+}
+
+function getDoseFormAmount() {
+    const selectedAmount = document.getElementById('dose-amount').value;
+    if (selectedAmount === 'custom') {
+        return Number(document.getElementById('custom-dose').value);
+    }
+    return Number(selectedAmount);
 }
 
 function openLogModal(type = 'side_effect', log = null) {
@@ -630,21 +906,24 @@ function buildChartData() {
 function exportJson() {
     downloadFile(
         `wegovy-tracker-${toDateInput(new Date())}.json`,
-        JSON.stringify({ doses: state.doses, logs: state.logs }, null, 2),
+        JSON.stringify({ doses: state.doses, cartridges: state.cartridges, logs: state.logs }, null, 2),
         'application/json'
     );
 }
 
 function exportCsv() {
     const rows = [
-        ['type', 'datetime', 'amount_or_title', 'detail', 'intensity', 'concentration_mg']
+        ['type', 'datetime', 'amount_or_title', 'volume_ml', 'cartridge', 'detail', 'intensity', 'concentration_mg']
     ];
 
     getSortedDoses('asc').forEach((dose) => {
+        const cartridge = dose.cartridgeId ? getCartridgeById(dose.cartridgeId) : null;
         rows.push([
             'dose',
             dose.datetime,
             `${dose.amount}mg`,
+            formatMl(doseToMl(dose.amount)),
+            cartridge ? cartridge.name : '',
             `${dose.site || ''} ${dose.notes || ''}`.trim(),
             '',
             getConcentrationAt(new Date(dose.datetime)).toFixed(2)
@@ -656,6 +935,8 @@ function exportCsv() {
             log.type,
             log.datetime,
             log.title,
+            '',
+            '',
             log.notes || '',
             log.intensity,
             getConcentrationAt(new Date(log.datetime)).toFixed(2)
@@ -673,6 +954,7 @@ function seedDemoData() {
 
     const now = new Date();
     const start = addDays(now, -42);
+    const demoCartridgeId = createId();
     const newDoses = [];
 
     for (let i = 0; i < 7; i += 1) {
@@ -682,10 +964,18 @@ function seedDemoData() {
             id: createId(),
             datetime: date.toISOString(),
             amount: doseForWeek(i),
+            cartridgeId: demoCartridgeId,
             site: i % 2 ? '허벅지' : '복부',
             notes: i === 0 ? '시작 기록' : ''
         });
     }
+
+    state.cartridges.push({
+        id: demoCartridgeId,
+        name: '예시 카트리지',
+        openedDate: toDateInput(start),
+        notes: '예시 데이터용 9.6mg / 3mL 카트리지'
+    });
 
     const newLogs = [
         {
@@ -724,6 +1014,7 @@ function seedDemoData() {
 function resetData() {
     if (!confirm('모든 투약/기록 데이터를 삭제할까요?')) return;
     state.doses = [];
+    state.cartridges = [];
     state.logs = [];
     persistState();
     refreshAll();
@@ -750,9 +1041,11 @@ function updateCustomDoseVisibility() {
 
 function setDefaultDates() {
     document.getElementById('dose-date').value = toDateTimeInput(new Date());
+    document.getElementById('cartridge-opened-date').value = toDateInput(new Date());
     document.getElementById('log-date').value = toDateTimeInput(new Date());
     document.getElementById('bulk-start-date').value = toDateInput(new Date());
     updateBulkPreview();
+    updateDoseVolumeInfo();
 }
 
 function getLastDose() {
@@ -778,6 +1071,12 @@ function getLikelyNextDose() {
     return String(doseForWeek(count));
 }
 
+function getDefaultCartridgeId() {
+    const currentCartridge = getCurrentCartridge();
+    const usage = currentCartridge ? getCartridgeUsage(currentCartridge) : null;
+    return usage && usage.remainingMg > 0.000001 ? currentCartridge.id : '';
+}
+
 function doseForWeek(weekIndex) {
     if (weekIndex < 4) return 0.25;
     if (weekIndex < 8) return 0.5;
@@ -801,12 +1100,27 @@ function formatDose(value) {
     });
 }
 
+function formatMl(value) {
+    return Number(value).toFixed(3);
+}
+
+function doseToMl(value) {
+    return Number(value) / MG_PER_ML;
+}
+
 function formatDateTime(date) {
     return date.toLocaleString('ko-KR', {
         month: '2-digit',
         day: '2-digit',
         hour: '2-digit',
         minute: '2-digit'
+    });
+}
+
+function formatDateOnly(date) {
+    return date.toLocaleDateString('ko-KR', {
+        month: '2-digit',
+        day: '2-digit'
     });
 }
 
