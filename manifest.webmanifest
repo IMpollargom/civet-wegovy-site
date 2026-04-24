@@ -1,0 +1,17 @@
+{
+  "name": "CIVET WEGOVY",
+  "short_name": "WEGOVY",
+  "description": "위고비 투약, 농도, 부작용과 효능을 기록하는 개인 트래커",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#121a2d",
+  "theme_color": "#121a2d",
+  "lang": "ko-KR",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

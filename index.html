@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>위고비를 똑똑하게 - CIVET WEGOVY</title>
+    <meta name="description" content="위고비 투약, 현재 체내 농도 추정, 부작용과 효능 기록을 브라우저에 저장하는 개인 트래커입니다.">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="theme-color" content="#121a2d">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="CIVET WEGOVY">
+    <meta property="og:title" content="CIVET WEGOVY">
+    <meta property="og:description" content="위고비 투약과 체내 농도, 부작용/효능을 기록하는 개인 트래커">
+    <meta property="og:type" content="website">
+    <link rel="icon" href="./icon.svg" type="image/svg+xml">
+    <link rel="manifest" href="./manifest.webmanifest">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+    <div id="app" class="app-container">
+        <header class="header">
+            <div class="logo-container">
+                <span class="logo-mark">W</span>
+                <span class="logo-text">CIVET WEGOVY</span>
+            </div>
+            <div class="user-info">
+                <span id="today-label">오늘</span>
+                <div class="user-avatar">💉</div>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <section id="tab-home" class="tab-content active">
+                <div class="hero-card">
+                    <div class="hero-copy">
+                        <div class="section-title">현재 체내 농도</div>
+                        <div class="concentration-display">
+                            <div class="concentration-value">
+                                <span id="home-concentration">0.00</span>
+                                <span class="unit">mg</span>
+                            </div>
+                            <div id="home-last-updated" class="last-updated">아직 투약 기록이 없습니다</div>
+                        </div>
+                    </div>
+                    <div class="dose-ring">
+                        <span id="next-dose-days">-</span>
+                        <small>다음 투약</small>
+                    </div>
+                </div>
+
+                <div class="quick-actions">
+                    <button class="quick-action" data-open-dose>투약 기록</button>
+                    <button class="quick-action warning" data-open-log="side_effect">부작용 작성</button>
+                    <button class="quick-action success" data-open-log="good_effect">효능 작성</button>
+                </div>
+
+                <div class="character-card">
+                    <div class="section-title">빠른 통계</div>
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <div class="stat-label">총 투약 횟수</div>
+                            <div class="stat-value" id="total-doses">0</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">현재 용량</div>
+                            <div class="stat-value" id="current-dose">-</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">부작용 기록</div>
+                            <div class="stat-value" id="side-effect-count">0</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">효능 기록</div>
+                            <div class="stat-value" id="effect-count">0</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="character-card">
+                    <div class="section-title">농도 포인트</div>
+                    <div id="home-insight" class="insight-panel"></div>
+                </div>
+            </section>
+
+            <section id="tab-dose" class="tab-content">
+                <div class="character-card">
+                    <div class="tab-header">
+                        <div class="section-title">위고비 투약 기록</div>
+                        <div class="button-row">
+                            <button id="bulk-dose-btn" class="add-button secondary">과거 입력</button>
+                            <button id="add-dose-btn" class="add-button">+ 추가</button>
+                        </div>
+                    </div>
+                    <div id="dose-list" class="list-container"></div>
+                </div>
+            </section>
+
+            <section id="tab-journal" class="tab-content">
+                <div class="tracking-buttons">
+                    <button class="tracking-btn side-effect" data-open-log="side_effect">부작용</button>
+                    <button class="tracking-btn high-effect" data-open-log="good_effect">효능 좋음</button>
+                    <button class="tracking-btn low-effect" data-open-log="low_effect">효과 적음</button>
+                </div>
+
+                <div class="character-card">
+                    <div class="tab-header">
+                        <div class="section-title">부작용 & 효능 기록</div>
+                        <button id="add-log-btn" class="add-button">+ 추가</button>
+                    </div>
+                    <div class="sub-tabs">
+                        <button class="sub-tab-item active" data-filter="all">전체</button>
+                        <button class="sub-tab-item" data-filter="side_effect">부작용</button>
+                        <button class="sub-tab-item" data-filter="good_effect">효능</button>
+                        <button class="sub-tab-item" data-filter="low_effect">부족</button>
+                    </div>
+                    <div id="log-list" class="list-container"></div>
+                </div>
+            </section>
+
+            <section id="tab-graph" class="tab-content">
+                <div class="character-card">
+                    <div class="tab-header">
+                        <div class="section-title">농도 변화 그래프</div>
+                        <span class="chip">반감기 7일 기준</span>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="concentration-chart"></canvas>
+                    </div>
+                    <div id="range-summary" class="range-list"></div>
+                </div>
+            </section>
+
+            <section id="tab-settings" class="tab-content">
+                <div class="character-card">
+                    <div class="section-title">위고비 표준 증량</div>
+                    <div class="schedule-grid">
+                        <div><strong>1-4주</strong><span>0.25mg</span></div>
+                        <div><strong>5-8주</strong><span>0.5mg</span></div>
+                        <div><strong>9-12주</strong><span>1.0mg</span></div>
+                        <div><strong>13-16주</strong><span>1.7mg</span></div>
+                        <div><strong>17주+</strong><span>2.4mg</span></div>
+                    </div>
+                </div>
+
+                <div class="character-card">
+                    <div class="section-title">데이터</div>
+                    <button id="export-json-btn" class="action-button">JSON 내보내기</button>
+                    <button id="export-csv-btn" class="action-button muted">CSV 내보내기</button>
+                    <button id="seed-demo-btn" class="action-button muted">예시 데이터 넣기</button>
+                    <button id="reset-data-btn" class="action-button danger">전체 삭제</button>
+                </div>
+
+                <div class="character-card compact">
+                    <div class="section-title">주의</div>
+                    <p class="notice-text">이 화면의 농도는 기록된 투약량과 반감기만으로 계산한 개인 기록용 추정치입니다. 처방, 용량 변경, 이상 증상 판단은 의료진과 확인하세요.</p>
+                </div>
+            </section>
+        </main>
+
+        <nav class="bottom-nav">
+            <button class="nav-item active" data-tab="home">
+                <span class="nav-icon">🏠</span>
+                <span>홈</span>
+            </button>
+            <button class="nav-item" data-tab="dose">
+                <span class="nav-icon">💉</span>
+                <span>투약</span>
+            </button>
+            <button class="nav-item" data-tab="journal">
+                <span class="nav-icon">📝</span>
+                <span>기록</span>
+            </button>
+            <button class="nav-item" data-tab="graph">
+                <span class="nav-icon">📊</span>
+                <span>그래프</span>
+            </button>
+            <button class="nav-item" data-tab="settings">
+                <span class="nav-icon">⚙️</span>
+                <span>설정</span>
+            </button>
+        </nav>
+    </div>
+
+    <div id="dose-modal" class="modal" aria-hidden="true">
+        <div class="modal-content">
+            <div id="dose-modal-title" class="modal-title">투약 기록 추가</div>
+            <form id="dose-form">
+                <input type="hidden" id="dose-id">
+                <div class="form-group">
+                    <label class="form-label" for="dose-date">투약 날짜/시간</label>
+                    <input type="datetime-local" id="dose-date" class="form-input" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="dose-amount">투약량</label>
+                    <select id="dose-amount" class="form-input" required>
+                        <option value="0.25">0.25mg</option>
+                        <option value="0.5">0.5mg</option>
+                        <option value="1">1.0mg</option>
+                        <option value="1.7">1.7mg</option>
+                        <option value="2.4">2.4mg</option>
+                        <option value="custom">직접 입력</option>
+                    </select>
+                </div>
+                <div id="custom-dose-group" class="form-group hidden">
+                    <label class="form-label" for="custom-dose">직접 입력 용량 (mg)</label>
+                    <input type="number" id="custom-dose" class="form-input" min="0.01" max="10" step="0.01" placeholder="예: 0.75">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="dose-site">투약 부위</label>
+                    <select id="dose-site" class="form-input">
+                        <option value="복부">복부</option>
+                        <option value="허벅지">허벅지</option>
+                        <option value="상완">상완</option>
+                        <option value="기타">기타</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="dose-notes">메모</label>
+                    <textarea id="dose-notes" class="form-input" rows="3" placeholder="펜 상태, 식사, 컨디션 등"></textarea>
+                </div>
+                <button type="submit" class="action-button">저장</button>
+                <button type="button" class="action-button cancel" data-close-modal>취소</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="bulk-modal" class="modal" aria-hidden="true">
+        <div class="modal-content">
+            <div class="modal-title">과거 투약 기록 입력</div>
+            <form id="bulk-form">
+                <div class="form-group">
+                    <label class="form-label" for="bulk-start-date">시작일</label>
+                    <input type="date" id="bulk-start-date" class="form-input" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="bulk-time">투약 시간</label>
+                    <input type="time" id="bulk-time" class="form-input" value="09:00" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="bulk-weeks">입력할 주 수</label>
+                    <input type="number" id="bulk-weeks" class="form-input" min="1" max="104" step="1" value="16" required>
+                </div>
+                <div id="bulk-preview" class="preview-box"></div>
+                <button type="submit" class="action-button">표준 스케줄로 추가</button>
+                <button type="button" class="action-button cancel" data-close-modal>취소</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="log-modal" class="modal" aria-hidden="true">
+        <div class="modal-content">
+            <div id="log-modal-title" class="modal-title">기록 추가</div>
+            <form id="log-form">
+                <input type="hidden" id="log-id">
+                <div class="form-group">
+                    <label class="form-label" for="log-type">기록 종류</label>
+                    <select id="log-type" class="form-input" required>
+                        <option value="side_effect">부작용</option>
+                        <option value="good_effect">효능 좋음</option>
+                        <option value="low_effect">효과 적음</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="log-date">날짜/시간</label>
+                    <input type="datetime-local" id="log-date" class="form-input" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="log-title">항목</label>
+                    <input type="text" id="log-title" class="form-input" placeholder="예: 메스꺼움, 식욕 감소, 포만감" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="log-intensity">강도</label>
+                    <input type="range" id="log-intensity" min="1" max="5" step="1" value="3">
+                    <div class="range-scale">
+                        <span>1</span><span id="log-intensity-label">3</span><span>5</span>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="log-notes">내용</label>
+                    <textarea id="log-notes" class="form-input" rows="4" placeholder="언제 시작됐는지, 얼마나 지속됐는지, 식사/수면과 관련이 있었는지"></textarea>
+                </div>
+                <button type="submit" class="action-button">저장</button>
+                <button type="button" class="action-button cancel" data-close-modal>취소</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="toast" class="toast" role="status"></div>
+
+    <script src="./app.js"></script>
+</body>
+</html>
