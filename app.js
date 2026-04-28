@@ -89,6 +89,7 @@ function setupEvents() {
     document.getElementById('custom-dose').addEventListener('input', updateDoseVolumeInfo);
     document.getElementById('dose-cartridge').addEventListener('change', updateDoseVolumeInfo);
     document.getElementById('cartridge-adjust-ml').addEventListener('input', updateCartridgeAdjustmentPreview);
+    document.getElementById('cartridge-adjust-user').addEventListener('input', updateCartridgeAdjustmentPreview);
     document.getElementById('log-intensity').addEventListener('input', (event) => {
         document.getElementById('log-intensity-label').textContent = event.target.value;
     });
@@ -133,7 +134,7 @@ function loadState() {
         state.cartridges = Array.isArray(saved.cartridges)
             ? saved.cartridges.map((cartridge) => ({
                 ...cartridge,
-                manualAdjustments: Array.isArray(cartridge.manualAdjustments) ? cartridge.manualAdjustments : []
+                manualAdjustments: normalizeManualAdjustments(cartridge.manualAdjustments)
             }))
             : [];
         state.logs = Array.isArray(saved.logs) ? saved.logs : [];
@@ -494,7 +495,7 @@ function applyGoogleSyncPayload(payload) {
     state.cartridges = Array.isArray(payload.tracker.cartridges)
         ? payload.tracker.cartridges.map((cartridge) => ({
             ...cartridge,
-            manualAdjustments: Array.isArray(cartridge.manualAdjustments) ? cartridge.manualAdjustments : []
+            manualAdjustments: normalizeManualAdjustments(cartridge.manualAdjustments)
         }))
         : [];
     state.logs = Array.isArray(payload.tracker.logs) ? payload.tracker.logs : [];
@@ -843,7 +844,11 @@ function renderCartridges() {
         const isEmpty = usage.remainingMg <= 0.000001;
         const statusText = isEmpty ? '소진됨' : `${usage.totalEventCount}건 기록`;
         const recentManual = usage.recentManualAdjustment
-            ? `${formatDateTime(new Date(usage.recentManualAdjustment.datetime))} · ${formatMl(usage.recentManualAdjustment.amountMl)}mL${usage.recentManualAdjustment.note ? ` · ${escapeHtml(usage.recentManualAdjustment.note)}` : ''}`
+            ? [
+                `${formatDateTime(new Date(usage.recentManualAdjustment.datetime))} · ${formatMl(usage.recentManualAdjustment.amountMl)}mL`,
+                usage.recentManualAdjustment.userName ? `사용 ${escapeHtml(usage.recentManualAdjustment.userName)}` : '',
+                usage.recentManualAdjustment.note ? escapeHtml(usage.recentManualAdjustment.note) : ''
+            ].filter(Boolean).join(' · ')
             : '';
 
         return `
@@ -906,7 +911,7 @@ function getCartridgeById(id) {
 
 function getCartridgeUsage(cartridge, excludedDoseId = '') {
     const linkedDoses = state.doses.filter((dose) => dose.cartridgeId === cartridge.id && dose.id !== excludedDoseId);
-    const manualAdjustments = Array.isArray(cartridge.manualAdjustments) ? cartridge.manualAdjustments : [];
+    const manualAdjustments = normalizeManualAdjustments(cartridge.manualAdjustments);
     const usedMg = linkedDoses.reduce((sum, dose) => sum + Number(dose.amount || 0), 0);
     const usedMl = linkedDoses.reduce((sum, dose) => sum + doseToMl(Number(dose.amount || 0)), 0);
     const manualUsedMl = manualAdjustments.reduce((sum, adjustment) => sum + Number(adjustment.amountMl || 0), 0);
@@ -1081,7 +1086,7 @@ function saveBulkDoses(event) {
                 datetime: date.toISOString(),
                 amount,
                 cartridgeId: '',
-                site: '복부',
+                site: i % 2 ? '오른쪽 허벅지' : '복부',
                 notes: '표준 증량 스케줄로 입력'
             });
         }
@@ -1104,6 +1109,7 @@ function openCartridgeModal(cartridge = null) {
     document.getElementById('cartridge-adjust-id').value = cartridge?.id || '';
     document.getElementById('cartridge-adjust-datetime').value = toDateTimeInput(new Date());
     document.getElementById('cartridge-adjust-ml').value = '';
+    document.getElementById('cartridge-adjust-user').value = '';
     document.getElementById('cartridge-adjust-note').value = '';
 
     const adjustSection = document.getElementById('cartridge-adjust-section');
@@ -1130,7 +1136,7 @@ function saveCartridgeFromForm(event) {
         openedDate: document.getElementById('cartridge-opened-date').value,
         notes: document.getElementById('cartridge-notes').value.trim(),
         manualAdjustments: index >= 0
-            ? (Array.isArray(state.cartridges[index].manualAdjustments) ? state.cartridges[index].manualAdjustments : [])
+            ? normalizeManualAdjustments(state.cartridges[index].manualAdjustments)
             : []
     };
 
@@ -1173,14 +1179,16 @@ function saveCartridgeAdjustmentFromForm(event) {
         datetime: new Date(document.getElementById('cartridge-adjust-datetime').value).toISOString(),
         amountMl,
         amountMg: amountMl * MG_PER_ML,
+        userName: document.getElementById('cartridge-adjust-user').value.trim(),
         note: document.getElementById('cartridge-adjust-note').value.trim()
     };
 
-    cartridge.manualAdjustments = Array.isArray(cartridge.manualAdjustments) ? cartridge.manualAdjustments : [];
+    cartridge.manualAdjustments = normalizeManualAdjustments(cartridge.manualAdjustments);
     cartridge.manualAdjustments.push(adjustment);
 
     persistState();
     document.getElementById('cartridge-adjust-ml').value = '';
+    document.getElementById('cartridge-adjust-user').value = '';
     document.getElementById('cartridge-adjust-note').value = '';
     document.getElementById('cartridge-adjust-datetime').value = toDateTimeInput(new Date());
     updateCartridgeAdjustmentPreview(cartridge.id);
@@ -1243,6 +1251,7 @@ function updateCartridgeAdjustmentPreview(forcedCartridgeId = '') {
 
     const usage = getCartridgeUsage(cartridge);
     const amountMl = Number(document.getElementById('cartridge-adjust-ml').value);
+    const userName = document.getElementById('cartridge-adjust-user').value.trim();
 
     summary.innerHTML = [
         `${escapeHtml(cartridge.name)} 현재 잔량`,
@@ -1260,6 +1269,9 @@ function updateCartridgeAdjustmentPreview(forcedCartridgeId = '') {
     const lines = [
         `이번 수동 차감: ${formatMl(amountMl)}mL = ${formatDose(amountMg)}mg`
     ];
+    if (userName) {
+        lines.push(`사용자: ${escapeHtml(userName)}`);
+    }
 
     if (remainingAfterMl < -0.000001) {
         lines.push('남아 있는 mL보다 크게 차감할 수 없습니다');
@@ -1537,7 +1549,7 @@ function exportCsv() {
     });
 
     getSortedCartridges().forEach((cartridge) => {
-        (Array.isArray(cartridge.manualAdjustments) ? cartridge.manualAdjustments : [])
+        normalizeManualAdjustments(cartridge.manualAdjustments)
             .slice()
             .sort((a, b) => new Date(a.datetime) - new Date(b.datetime))
             .forEach((adjustment) => {
@@ -1547,7 +1559,10 @@ function exportCsv() {
                     `${formatDose(adjustment.amountMg || (Number(adjustment.amountMl || 0) * MG_PER_ML))}mg`,
                     formatMl(adjustment.amountMl || 0),
                     cartridge.name,
-                    adjustment.note || '',
+                    [
+                        adjustment.userName ? `사용자: ${adjustment.userName}` : '',
+                        adjustment.note || ''
+                    ].filter(Boolean).join(' · '),
                     '',
                     ''
                 ]);
@@ -1576,7 +1591,7 @@ function seedDemoData() {
             datetime: date.toISOString(),
             amount: doseForWeek(i),
             cartridgeId: demoCartridgeId,
-            site: i % 2 ? '허벅지' : '복부',
+            site: i % 2 ? '오른쪽 허벅지' : '왼쪽 허벅지',
             notes: i === 0 ? '시작 기록' : ''
         });
     }
@@ -1696,6 +1711,15 @@ function doseForWeek(weekIndex) {
     if (weekIndex < 12) return 1;
     if (weekIndex < 16) return 1.7;
     return 2.4;
+}
+
+function normalizeManualAdjustments(manualAdjustments) {
+    return Array.isArray(manualAdjustments)
+        ? manualAdjustments.map((adjustment) => ({
+            ...adjustment,
+            userName: typeof adjustment.userName === 'string' ? adjustment.userName : ''
+        }))
+        : [];
 }
 
 function getLogTypeLabel(type) {
