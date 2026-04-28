@@ -98,6 +98,23 @@ button {
     white-space: nowrap;
 }
 
+.profile-switch {
+    max-width: 106px;
+    height: 32px;
+    padding: 0 28px 0 10px;
+    border: 1px solid rgba(141, 242, 220, 0.28);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 850;
+}
+
+.profile-switch option {
+    background: #16213e;
+    color: #fff;
+}
+
 .user-avatar {
     width: 32px;
     height: 32px;

@@ -92,6 +92,9 @@ function setupEvents() {
     document.getElementById('cartridge-form').addEventListener('submit', saveCartridgeFromForm);
     document.getElementById('cartridge-adjust-form').addEventListener('submit', saveCartridgeAdjustmentFromForm);
     document.getElementById('profile-form').addEventListener('submit', saveProfileFromForm);
+    document.getElementById('active-profile-select').addEventListener('change', (event) => {
+        setActiveProfile(event.target.value);
+    });
 
     document.getElementById('dose-amount').addEventListener('change', () => {
         updateCustomDoseVisibility();
@@ -276,6 +279,7 @@ function renderProfiles() {
     const activeProfile = getProfileById(state.activeProfileId) || state.profiles[0];
     const chip = document.getElementById('active-profile-chip');
     const list = document.getElementById('profile-list');
+    renderProfileOptions('active-profile-select', state.activeProfileId);
 
     if (chip) {
         chip.textContent = activeProfile ? activeProfile.name : '미지정';

@@ -23,7 +23,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
     <script src="./google-sync-config.js"></script>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
-    <link rel="stylesheet" href="./styles.css">
+    <link rel="stylesheet" href="./styles.css?v=20260428-profile2">
 </head>
 <body>
     <div id="app" class="app-container">
@@ -33,6 +33,7 @@
                 <span class="logo-text">CIVET WEGOVY</span>
             </div>
             <div class="user-info">
+                <select id="active-profile-select" class="profile-switch" aria-label="현재 사용자"></select>
                 <span id="today-label">오늘</span>
                 <div class="user-avatar">💉</div>
             </div>
@@ -457,6 +458,6 @@
 
     <div id="toast" class="toast" role="status"></div>
 
-    <script src="./app.js"></script>
+    <script src="./app.js?v=20260428-profile2"></script>
 </body>
 </html>
