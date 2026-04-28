@@ -5,6 +5,14 @@ const WEGOVY_DOSES = [0.25, 0.5, 1, 1.7, 2.4];
 const CARTRIDGE_TOTAL_MG = 9.6;
 const CARTRIDGE_TOTAL_ML = 3;
 const MG_PER_ML = CARTRIDGE_TOTAL_MG / CARTRIDGE_TOTAL_ML;
+const GOOGLE_SYNC_STORAGE_KEY = 'civet-wegovy-google-sync-v1';
+const GOOGLE_DRIVE_APPDATA_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
+const GOOGLE_SYNC_SCOPES = `openid email profile ${GOOGLE_DRIVE_APPDATA_SCOPE}`;
+const GOOGLE_SYNC_FILE_NAME = 'civet-wegovy-tracker.json';
+
+let googleTokenClient = null;
+let googleTokenResolver = null;
+let googleTokenRejecter = null;
 
 const state = {
     doses: [],
@@ -12,11 +20,21 @@ const state = {
     logs: [],
     activeTab: 'home',
     logFilter: 'all',
-    chart: null
+    chart: null,
+    googleSync: {
+        profile: null,
+        driveFileId: '',
+        driveModifiedTime: '',
+        lastSyncedAt: '',
+        busyAction: '',
+        statusTone: 'neutral',
+        statusMessage: '이 기기의 기록을 Google Drive appDataFolder에 저장할 수 있습니다.'
+    }
 };
 
 document.addEventListener('DOMContentLoaded', () => {
     loadState();
+    loadGoogleSyncState();
     setupEvents();
     setDefaultDates();
     refreshAll();
@@ -102,6 +120,10 @@ function setupEvents() {
     document.getElementById('export-csv-btn').addEventListener('click', exportCsv);
     document.getElementById('seed-demo-btn').addEventListener('click', seedDemoData);
     document.getElementById('reset-data-btn').addEventListener('click', resetData);
+    document.getElementById('google-connect-btn').addEventListener('click', connectGoogleSync);
+    document.getElementById('google-upload-btn').addEventListener('click', uploadGoogleSync);
+    document.getElementById('google-download-btn').addEventListener('click', downloadGoogleSync);
+    document.getElementById('google-disconnect-btn').addEventListener('click', disconnectGoogleSync);
 }
 
 function loadState() {
@@ -131,6 +153,36 @@ function persistState() {
     }));
 }
 
+function loadGoogleSyncState() {
+    try {
+        const saved = JSON.parse(localStorage.getItem(GOOGLE_SYNC_STORAGE_KEY) || '{}');
+        state.googleSync.profile = saved.profile && typeof saved.profile === 'object' ? saved.profile : null;
+        state.googleSync.driveFileId = typeof saved.driveFileId === 'string' ? saved.driveFileId : '';
+        state.googleSync.driveModifiedTime = typeof saved.driveModifiedTime === 'string' ? saved.driveModifiedTime : '';
+        state.googleSync.lastSyncedAt = typeof saved.lastSyncedAt === 'string' ? saved.lastSyncedAt : '';
+    } catch (error) {
+        console.error(error);
+        state.googleSync.profile = null;
+        state.googleSync.driveFileId = '';
+        state.googleSync.driveModifiedTime = '';
+        state.googleSync.lastSyncedAt = '';
+    }
+
+    if (!hasGoogleClientId()) {
+        state.googleSync.statusTone = 'neutral';
+        state.googleSync.statusMessage = 'Google Client ID가 없어서 로그인은 아직 비활성화되어 있습니다.';
+    }
+}
+
+function persistGoogleSyncState() {
+    localStorage.setItem(GOOGLE_SYNC_STORAGE_KEY, JSON.stringify({
+        profile: state.googleSync.profile,
+        driveFileId: state.googleSync.driveFileId,
+        driveModifiedTime: state.googleSync.driveModifiedTime,
+        lastSyncedAt: state.googleSync.lastSyncedAt
+    }));
+}
+
 function refreshAll() {
     document.getElementById('today-label').textContent = new Date().toLocaleDateString('ko-KR', {
         month: 'short',
@@ -142,7 +194,416 @@ function refreshAll() {
     renderCartridges();
     renderLogs();
     renderRangeSummary();
+    renderGoogleSync();
     updateChart();
+}
+
+function renderGoogleSync() {
+    const chip = document.getElementById('google-sync-chip');
+    const account = document.getElementById('google-sync-account');
+    const remote = document.getElementById('google-sync-remote');
+    const last = document.getElementById('google-sync-last');
+    const status = document.getElementById('google-sync-status');
+    const connectButton = document.getElementById('google-connect-btn');
+    const uploadButton = document.getElementById('google-upload-btn');
+    const downloadButton = document.getElementById('google-download-btn');
+    const disconnectButton = document.getElementById('google-disconnect-btn');
+    const clientReady = hasGoogleClientId();
+    const connected = Boolean(state.googleSync.profile);
+    const busy = Boolean(state.googleSync.busyAction);
+
+    chip.className = 'chip';
+    status.className = `preview-box sync-status ${state.googleSync.statusTone}`;
+
+    if (!clientReady) {
+        chip.textContent = '설정 필요';
+    } else if (busy) {
+        chip.textContent = '동작 중';
+    } else if (connected) {
+        chip.textContent = '연결됨';
+    } else {
+        chip.textContent = '미연결';
+    }
+
+    account.textContent = connected
+        ? [state.googleSync.profile.name, state.googleSync.profile.email].filter(Boolean).join(' · ')
+        : '아직 연결되지 않았습니다';
+    remote.textContent = state.googleSync.driveModifiedTime
+        ? `${formatDateTime(new Date(state.googleSync.driveModifiedTime))} 백업 확인`
+        : state.googleSync.driveFileId
+            ? 'Drive 파일 연결됨'
+            : '아직 백업 파일이 없습니다';
+    last.textContent = state.googleSync.lastSyncedAt
+        ? formatDateTime(new Date(state.googleSync.lastSyncedAt))
+        : '아직 없음';
+    status.textContent = state.googleSync.statusMessage;
+
+    connectButton.disabled = busy || !clientReady;
+    uploadButton.disabled = busy || !clientReady || !connected;
+    downloadButton.disabled = busy || !clientReady || !connected;
+    disconnectButton.disabled = busy || !connected;
+
+    connectButton.textContent = state.googleSync.busyAction === 'connect' ? '연결 중...' : 'Google 로그인';
+    uploadButton.textContent = state.googleSync.busyAction === 'upload' ? '백업 중...' : '지금 백업';
+    downloadButton.textContent = state.googleSync.busyAction === 'download' ? '불러오는 중...' : 'Drive 불러오기';
+    disconnectButton.textContent = state.googleSync.busyAction === 'disconnect' ? '해제 중...' : '이 기기 연결 해제';
+}
+
+function getGoogleSyncConfig() {
+    if (window.CIVET_WEGOVY_GOOGLE_SYNC && typeof window.CIVET_WEGOVY_GOOGLE_SYNC === 'object') {
+        return window.CIVET_WEGOVY_GOOGLE_SYNC;
+    }
+    return {};
+}
+
+function getGoogleClientId() {
+    const config = getGoogleSyncConfig();
+    return typeof config.clientId === 'string' ? config.clientId.trim() : '';
+}
+
+function getGoogleDriveSyncFileName() {
+    const config = getGoogleSyncConfig();
+    return typeof config.driveFileName === 'string' && config.driveFileName.trim()
+        ? config.driveFileName.trim()
+        : GOOGLE_SYNC_FILE_NAME;
+}
+
+function hasGoogleClientId() {
+    return Boolean(getGoogleClientId());
+}
+
+function setGoogleSyncBusy(action) {
+    state.googleSync.busyAction = action;
+    renderGoogleSync();
+}
+
+function setGoogleSyncStatus(tone, message) {
+    state.googleSync.statusTone = tone;
+    state.googleSync.statusMessage = message;
+    renderGoogleSync();
+}
+
+function clearGoogleSyncState() {
+    state.googleSync.profile = null;
+    state.googleSync.driveFileId = '';
+    state.googleSync.driveModifiedTime = '';
+    state.googleSync.lastSyncedAt = '';
+    localStorage.removeItem(GOOGLE_SYNC_STORAGE_KEY);
+}
+
+function ensureGoogleTokenClient() {
+    if (!hasGoogleClientId()) {
+        throw new Error('Google Client ID가 설정되지 않았습니다');
+    }
+
+    if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) {
+        throw new Error('Google 로그인 스크립트가 아직 준비되지 않았습니다');
+    }
+
+    if (!googleTokenClient) {
+        googleTokenClient = window.google.accounts.oauth2.initTokenClient({
+            client_id: getGoogleClientId(),
+            scope: GOOGLE_SYNC_SCOPES,
+            callback: (response) => {
+                if (response.error || !response.access_token) {
+                    googleTokenRejecter?.(new Error(response.error_description || response.error || 'Google 인증에 실패했습니다'));
+                    googleTokenResolver = null;
+                    googleTokenRejecter = null;
+                    return;
+                }
+                googleTokenResolver?.(response.access_token);
+                googleTokenResolver = null;
+                googleTokenRejecter = null;
+            },
+            error_callback: (error) => {
+                googleTokenRejecter?.(new Error(error.message || error.type || 'Google 인증 창을 열지 못했습니다'));
+                googleTokenResolver = null;
+                googleTokenRejecter = null;
+            }
+        });
+    }
+
+    return googleTokenClient;
+}
+
+function requestGoogleAccessToken(prompt = '', loginHint = '') {
+    return new Promise((resolve, reject) => {
+        googleTokenResolver = (token) => resolve(token);
+        googleTokenRejecter = (error) => reject(error);
+
+        ensureGoogleTokenClient().requestAccessToken({
+            prompt,
+            login_hint: loginHint || undefined
+        });
+    });
+}
+
+async function authorizeGoogle(forcePrompt = false) {
+    const prompt = forcePrompt || !state.googleSync.profile ? 'consent' : '';
+    const loginHint = prompt === '' ? state.googleSync.profile?.email || '' : '';
+
+    try {
+        const accessToken = await requestGoogleAccessToken(prompt, loginHint);
+        const profile = await fetchGoogleProfile(accessToken);
+        state.googleSync.profile = profile;
+        persistGoogleSyncState();
+        return { accessToken, profile };
+    } catch (error) {
+        if (!forcePrompt && state.googleSync.profile) {
+            return authorizeGoogle(true);
+        }
+        throw normalizeGoogleSyncError(error);
+    }
+}
+
+function normalizeGoogleSyncError(error) {
+    const message = error instanceof Error ? error.message : String(error || '');
+
+    if (message.includes('origin_mismatch')) {
+        return new Error('이 배포 주소가 Google OAuth 허용 출처에 아직 등록되지 않았습니다');
+    }
+    if (message.includes('popup_closed')) {
+        return new Error('Google 로그인 창이 닫혀 동기화를 완료하지 못했습니다');
+    }
+    if (message.includes('access_denied')) {
+        return new Error('Google Drive 접근 권한이 거부되었습니다');
+    }
+
+    return error instanceof Error ? error : new Error('Google 동기화에 실패했습니다');
+}
+
+async function googleFetchJson(url, accessToken, init = {}) {
+    const response = await fetch(url, {
+        ...init,
+        headers: {
+            Authorization: `Bearer ${accessToken}`,
+            ...(init.headers || {})
+        }
+    });
+
+    if (!response.ok) {
+        const detail = await response.text();
+        throw new Error(detail || 'Google API 요청에 실패했습니다');
+    }
+
+    return response.json();
+}
+
+function buildGoogleMultipartBody(metadata, payload) {
+    const boundary = `civet-wegovy-${crypto.randomUUID?.() || Date.now()}`;
+    const body = [
+        `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`,
+        `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(payload)}\r\n`,
+        `--${boundary}--`
+    ].join('');
+
+    return { boundary, body };
+}
+
+async function fetchGoogleProfile(accessToken) {
+    return googleFetchJson('https://www.googleapis.com/oauth2/v3/userinfo', accessToken);
+}
+
+async function getGoogleDriveSyncFile(accessToken) {
+    const query = encodeURIComponent(`name='${getGoogleDriveSyncFileName().replace(/'/g, "\\'")}' and trashed=false`);
+    const response = await googleFetchJson(
+        `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&pageSize=1&q=${query}&fields=files(id,name,modifiedTime,size)`,
+        accessToken
+    );
+
+    return response.files?.[0] || null;
+}
+
+function createGoogleSyncPayload() {
+    return {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        tracker: JSON.parse(JSON.stringify({
+            doses: state.doses,
+            cartridges: state.cartridges,
+            logs: state.logs
+        }))
+    };
+}
+
+function parseGoogleSyncPayload(input) {
+    if (!input || typeof input !== 'object') {
+        return null;
+    }
+
+    const candidate = input;
+    if (candidate.version !== 1 || !candidate.exportedAt || !candidate.tracker || typeof candidate.tracker !== 'object') {
+        return null;
+    }
+
+    return {
+        version: 1,
+        exportedAt: candidate.exportedAt,
+        tracker: {
+            doses: Array.isArray(candidate.tracker.doses) ? candidate.tracker.doses : [],
+            cartridges: Array.isArray(candidate.tracker.cartridges) ? candidate.tracker.cartridges : [],
+            logs: Array.isArray(candidate.tracker.logs) ? candidate.tracker.logs : []
+        }
+    };
+}
+
+async function uploadGoogleDriveSyncPayload(accessToken, payload, existingFileId = '') {
+    const metadata = existingFileId
+        ? { name: getGoogleDriveSyncFileName() }
+        : { name: getGoogleDriveSyncFileName(), parents: ['appDataFolder'] };
+    const { boundary, body } = buildGoogleMultipartBody(metadata, payload);
+    const url = existingFileId
+        ? `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=multipart&fields=id,name,modifiedTime,size`
+        : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime,size';
+
+    return googleFetchJson(url, accessToken, {
+        method: existingFileId ? 'PATCH' : 'POST',
+        headers: {
+            'Content-Type': `multipart/related; boundary=${boundary}`
+        },
+        body
+    });
+}
+
+async function downloadGoogleDriveSyncPayload(accessToken) {
+    const file = await getGoogleDriveSyncFile(accessToken);
+    if (!file) {
+        return null;
+    }
+
+    const response = await fetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`, {
+        headers: {
+            Authorization: `Bearer ${accessToken}`
+        }
+    });
+
+    if (!response.ok) {
+        throw new Error('Google Drive 백업 파일을 읽지 못했습니다');
+    }
+
+    const payload = parseGoogleSyncPayload(await response.json());
+    if (!payload) {
+        throw new Error('Google Drive 백업 파일 형식이 올바르지 않습니다');
+    }
+
+    return { file, payload };
+}
+
+function applyGoogleSyncPayload(payload) {
+    state.doses = Array.isArray(payload.tracker.doses) ? payload.tracker.doses : [];
+    state.cartridges = Array.isArray(payload.tracker.cartridges)
+        ? payload.tracker.cartridges.map((cartridge) => ({
+            ...cartridge,
+            manualAdjustments: Array.isArray(cartridge.manualAdjustments) ? cartridge.manualAdjustments : []
+        }))
+        : [];
+    state.logs = Array.isArray(payload.tracker.logs) ? payload.tracker.logs : [];
+    persistState();
+    refreshAll();
+}
+
+async function connectGoogleSync() {
+    if (!hasGoogleClientId()) {
+        setGoogleSyncStatus('error', 'Google Client ID가 없어서 로그인할 수 없습니다');
+        return;
+    }
+
+    try {
+        setGoogleSyncBusy('connect');
+        setGoogleSyncStatus('neutral', 'Google 계정과 Drive 백업 파일을 확인하는 중입니다');
+        const { accessToken, profile } = await authorizeGoogle();
+        const driveFile = await getGoogleDriveSyncFile(accessToken);
+
+        state.googleSync.profile = profile;
+        state.googleSync.driveFileId = driveFile?.id || '';
+        state.googleSync.driveModifiedTime = driveFile?.modifiedTime || '';
+        persistGoogleSyncState();
+
+        setGoogleSyncStatus(
+            'success',
+            driveFile
+                ? 'Google 연결이 완료되었습니다. 기존 Drive 백업 파일도 확인했습니다.'
+                : 'Google 연결이 완료되었습니다. 이제 현재 데이터를 Drive에 백업할 수 있습니다.'
+        );
+    } catch (error) {
+        setGoogleSyncStatus('error', normalizeGoogleSyncError(error).message);
+    } finally {
+        setGoogleSyncBusy('');
+    }
+}
+
+async function uploadGoogleSync() {
+    if (!state.googleSync.profile) {
+        setGoogleSyncStatus('error', '먼저 Google 로그인부터 연결하세요');
+        return;
+    }
+
+    try {
+        setGoogleSyncBusy('upload');
+        setGoogleSyncStatus('neutral', '현재 기기 데이터를 Google Drive에 저장하고 있습니다');
+        const { accessToken, profile } = await authorizeGoogle();
+        const payload = createGoogleSyncPayload();
+        const file = await uploadGoogleDriveSyncPayload(accessToken, payload, state.googleSync.driveFileId);
+
+        state.googleSync.profile = profile;
+        state.googleSync.driveFileId = file.id;
+        state.googleSync.driveModifiedTime = file.modifiedTime || '';
+        state.googleSync.lastSyncedAt = payload.exportedAt;
+        persistGoogleSyncState();
+
+        setGoogleSyncStatus('success', '현재 기기 데이터를 Google Drive 숨김 앱 폴더에 백업했습니다');
+    } catch (error) {
+        setGoogleSyncStatus('error', normalizeGoogleSyncError(error).message);
+    } finally {
+        setGoogleSyncBusy('');
+    }
+}
+
+async function downloadGoogleSync() {
+    if (!state.googleSync.profile) {
+        setGoogleSyncStatus('error', '먼저 Google 로그인부터 연결하세요');
+        return;
+    }
+
+    try {
+        setGoogleSyncBusy('download');
+        setGoogleSyncStatus('neutral', 'Google Drive 백업을 확인하고 있습니다');
+        const { accessToken, profile } = await authorizeGoogle();
+        const result = await downloadGoogleDriveSyncPayload(accessToken);
+
+        if (!result) {
+            setGoogleSyncStatus('neutral', 'Google Drive에 아직 저장된 백업 파일이 없습니다');
+            return;
+        }
+
+        const backupTime = result.file.modifiedTime || result.payload.exportedAt;
+        const message = `Drive 백업 ${formatDateTime(new Date(backupTime))}을 현재 기기에 불러올까요? 현재 기기 데이터는 전체 교체됩니다.`;
+        if (!confirm(message)) {
+            setGoogleSyncStatus('neutral', 'Drive 백업 불러오기를 취소했습니다');
+            return;
+        }
+
+        applyGoogleSyncPayload(result.payload);
+        state.googleSync.profile = profile;
+        state.googleSync.driveFileId = result.file.id;
+        state.googleSync.driveModifiedTime = result.file.modifiedTime || '';
+        state.googleSync.lastSyncedAt = result.payload.exportedAt;
+        persistGoogleSyncState();
+
+        setGoogleSyncStatus('success', 'Google Drive 백업을 현재 기기에 불러왔습니다');
+    } catch (error) {
+        setGoogleSyncStatus('error', normalizeGoogleSyncError(error).message);
+    } finally {
+        setGoogleSyncBusy('');
+    }
+}
+
+function disconnectGoogleSync() {
+    setGoogleSyncBusy('disconnect');
+    clearGoogleSyncState();
+    googleTokenClient = null;
+    setGoogleSyncStatus('neutral', '이 기기에서만 Google 연결 정보를 지웠습니다. Drive 백업 파일은 그대로 남아 있습니다.');
+    setGoogleSyncBusy('');
 }
 
 function switchTab(tabName) {
