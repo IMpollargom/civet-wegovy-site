@@ -142,6 +142,21 @@
             <section id="tab-settings" class="tab-content">
                 <div class="character-card">
                     <div class="tab-header">
+                        <div>
+                            <div class="section-title">사용자 프로필</div>
+                            <div class="section-subtitle">한 카트리지를 같이 쓰더라도 투약, 수동 차감, 부작용/효능 기록을 사람별로 남깁니다</div>
+                        </div>
+                        <span id="active-profile-chip" class="chip">나</span>
+                    </div>
+                    <form id="profile-form" class="profile-form">
+                        <input type="text" id="profile-name" class="form-input" maxlength="24" placeholder="예: 나, 배우자, 엄마">
+                        <button type="submit" class="add-button">프로필 추가</button>
+                    </form>
+                    <div id="profile-list" class="profile-list"></div>
+                </div>
+
+                <div class="character-card">
+                    <div class="tab-header">
                         <div class="section-title">위고비 표준 증량</div>
                         <span class="chip">9.6mg / 3mL 기준</span>
                     </div>
@@ -268,6 +283,10 @@
                     <input type="datetime-local" id="dose-date" class="form-input" required>
                 </div>
                 <div class="form-group">
+                    <label class="form-label" for="dose-profile">사용자</label>
+                    <select id="dose-profile" class="form-input" required></select>
+                </div>
+                <div class="form-group">
                     <label class="form-label" for="dose-amount">투약량</label>
                     <select id="dose-amount" class="form-input" required>
                         <option value="0.25">0.25mg (0.078mL)</option>
@@ -292,7 +311,9 @@
                 <div class="form-group">
                     <label class="form-label" for="dose-site">투약 부위</label>
                     <select id="dose-site" class="form-input">
-                        <option value="복부">복부</option>
+                        <option value="오른쪽 복부">오른쪽 복부</option>
+                        <option value="왼쪽 복부">왼쪽 복부</option>
+                        <option value="복부">복부 (구분 안 함)</option>
                         <option value="오른쪽 허벅지">오른쪽 허벅지</option>
                         <option value="왼쪽 허벅지">왼쪽 허벅지</option>
                         <option value="허벅지">허벅지 (구분 안 함)</option>
@@ -323,6 +344,10 @@
                 <div class="form-group">
                     <label class="form-label" for="bulk-time">투약 시간</label>
                     <input type="time" id="bulk-time" class="form-input" value="09:00" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="bulk-profile">사용자</label>
+                    <select id="bulk-profile" class="form-input" required></select>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="bulk-weeks">입력할 주 수</label>
@@ -375,8 +400,8 @@
                     </div>
                     <div id="cartridge-adjust-preview" class="preview-box"></div>
                     <div class="form-group">
-                        <label class="form-label" for="cartridge-adjust-user">누가 사용했는지</label>
-                        <input type="text" id="cartridge-adjust-user" class="form-input" placeholder="예: 나, 배우자, 가족">
+                        <label class="form-label" for="cartridge-adjust-profile">사용자</label>
+                        <select id="cartridge-adjust-profile" class="form-input" required></select>
                     </div>
                     <div class="form-group">
                         <label class="form-label" for="cartridge-adjust-note">메모</label>
@@ -404,6 +429,10 @@
                 <div class="form-group">
                     <label class="form-label" for="log-date">날짜/시간</label>
                     <input type="datetime-local" id="log-date" class="form-input" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="log-profile">사용자</label>
+                    <select id="log-profile" class="form-input" required></select>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="log-title">항목</label>

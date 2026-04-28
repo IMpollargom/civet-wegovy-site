@@ -438,6 +438,57 @@ button {
     background: rgba(239, 83, 80, 0.72);
 }
 
+.profile-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.profile-form .add-button {
+    min-width: 96px;
+}
+
+.profile-list {
+    display: grid;
+    gap: 8px;
+}
+
+.profile-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.profile-item.active {
+    border-color: rgba(141, 242, 220, 0.55);
+    background: rgba(141, 242, 220, 0.08);
+}
+
+.profile-name {
+    color: #fff;
+    font-size: 14px;
+    font-weight: 850;
+}
+
+.profile-meta {
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.profile-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
 .empty-state {
     padding: 28px 12px;
     text-align: center;
@@ -882,7 +933,8 @@ input[type="range"] {
     .stats-grid,
     .schedule-grid,
     .sync-summary-grid,
-    .sync-button-grid {
+    .sync-button-grid,
+    .profile-form {
         grid-template-columns: 1fr;
     }
 

@@ -9,12 +9,18 @@ const GOOGLE_SYNC_STORAGE_KEY = 'civet-wegovy-google-sync-v1';
 const GOOGLE_DRIVE_APPDATA_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
 const GOOGLE_SYNC_SCOPES = `openid email profile ${GOOGLE_DRIVE_APPDATA_SCOPE}`;
 const GOOGLE_SYNC_FILE_NAME = 'civet-wegovy-tracker.json';
+const DEFAULT_PROFILES = [
+    { id: 'profile-me', name: '나' },
+    { id: 'profile-partner', name: '동반자' }
+];
 
 let googleTokenClient = null;
 let googleTokenResolver = null;
 let googleTokenRejecter = null;
 
 const state = {
+    profiles: [],
+    activeProfileId: '',
     doses: [],
     cartridges: [],
     logs: [],
@@ -61,6 +67,8 @@ function setupEvents() {
         const editCartridgeButton = event.target.closest('[data-edit-cartridge]');
         const deleteCartridgeButton = event.target.closest('[data-delete-cartridge]');
         const useCartridgeButton = event.target.closest('[data-use-cartridge]');
+        const useProfileButton = event.target.closest('[data-use-profile]');
+        const deleteProfileButton = event.target.closest('[data-delete-profile]');
 
         if (editDoseButton) editDose(editDoseButton.dataset.editDose);
         if (deleteDoseButton) deleteDose(deleteDoseButton.dataset.deleteDose);
@@ -69,6 +77,8 @@ function setupEvents() {
         if (editCartridgeButton) editCartridge(editCartridgeButton.dataset.editCartridge);
         if (deleteCartridgeButton) deleteCartridge(deleteCartridgeButton.dataset.deleteCartridge);
         if (useCartridgeButton) openDoseModal(null, useCartridgeButton.dataset.useCartridge);
+        if (useProfileButton) setActiveProfile(useProfileButton.dataset.useProfile);
+        if (deleteProfileButton) deleteProfile(deleteProfileButton.dataset.deleteProfile);
     });
 
     document.getElementById('add-dose-btn').addEventListener('click', () => openDoseModal());
@@ -81,6 +91,7 @@ function setupEvents() {
     document.getElementById('log-form').addEventListener('submit', saveLogFromForm);
     document.getElementById('cartridge-form').addEventListener('submit', saveCartridgeFromForm);
     document.getElementById('cartridge-adjust-form').addEventListener('submit', saveCartridgeAdjustmentFromForm);
+    document.getElementById('profile-form').addEventListener('submit', saveProfileFromForm);
 
     document.getElementById('dose-amount').addEventListener('change', () => {
         updateCustomDoseVisibility();
@@ -89,7 +100,7 @@ function setupEvents() {
     document.getElementById('custom-dose').addEventListener('input', updateDoseVolumeInfo);
     document.getElementById('dose-cartridge').addEventListener('change', updateDoseVolumeInfo);
     document.getElementById('cartridge-adjust-ml').addEventListener('input', updateCartridgeAdjustmentPreview);
-    document.getElementById('cartridge-adjust-user').addEventListener('input', updateCartridgeAdjustmentPreview);
+    document.getElementById('cartridge-adjust-profile').addEventListener('change', updateCartridgeAdjustmentPreview);
     document.getElementById('log-intensity').addEventListener('input', (event) => {
         document.getElementById('log-intensity-label').textContent = event.target.value;
     });
@@ -130,16 +141,24 @@ function setupEvents() {
 function loadState() {
     try {
         const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-        state.doses = Array.isArray(saved.doses) ? saved.doses : [];
+        state.profiles = normalizeProfiles(saved.profiles, saved);
+        state.activeProfileId = normalizeProfileId(saved.activeProfileId || state.profiles[0]?.id || '');
+        state.doses = Array.isArray(saved.doses)
+            ? saved.doses.map(normalizeDose)
+            : [];
         state.cartridges = Array.isArray(saved.cartridges)
             ? saved.cartridges.map((cartridge) => ({
                 ...cartridge,
                 manualAdjustments: normalizeManualAdjustments(cartridge.manualAdjustments)
             }))
             : [];
-        state.logs = Array.isArray(saved.logs) ? saved.logs : [];
+        state.logs = Array.isArray(saved.logs)
+            ? saved.logs.map(normalizeLog)
+            : [];
     } catch (error) {
         console.error(error);
+        state.profiles = normalizeProfiles();
+        state.activeProfileId = state.profiles[0].id;
         state.doses = [];
         state.cartridges = [];
         state.logs = [];
@@ -148,6 +167,8 @@ function loadState() {
 
 function persistState() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        profiles: state.profiles,
+        activeProfileId: state.activeProfileId,
         doses: state.doses,
         cartridges: state.cartridges,
         logs: state.logs
@@ -191,6 +212,7 @@ function refreshAll() {
         weekday: 'short'
     });
     renderHome();
+    renderProfiles();
     renderDoses();
     renderCartridges();
     renderLogs();
@@ -248,6 +270,41 @@ function renderGoogleSync() {
     uploadButton.textContent = state.googleSync.busyAction === 'upload' ? '백업 중...' : '지금 백업';
     downloadButton.textContent = state.googleSync.busyAction === 'download' ? '불러오는 중...' : 'Drive 불러오기';
     disconnectButton.textContent = state.googleSync.busyAction === 'disconnect' ? '해제 중...' : '이 기기 연결 해제';
+}
+
+function renderProfiles() {
+    const activeProfile = getProfileById(state.activeProfileId) || state.profiles[0];
+    const chip = document.getElementById('active-profile-chip');
+    const list = document.getElementById('profile-list');
+
+    if (chip) {
+        chip.textContent = activeProfile ? activeProfile.name : '미지정';
+    }
+
+    if (!list) return;
+
+    list.innerHTML = state.profiles.map((profile) => {
+        const isActive = profile.id === state.activeProfileId;
+        const doseCount = state.doses.filter((dose) => dose.profileId === profile.id).length;
+        const logCount = state.logs.filter((log) => log.profileId === profile.id).length;
+        const manualCount = state.cartridges.reduce((count, cartridge) => (
+            count + normalizeManualAdjustments(cartridge.manualAdjustments)
+                .filter((adjustment) => adjustment.profileId === profile.id).length
+        ), 0);
+
+        return `
+            <article class="profile-item ${isActive ? 'active' : ''}">
+                <div>
+                    <div class="profile-name">${escapeHtml(profile.name)}</div>
+                    <div class="profile-meta">투약 ${doseCount}건 · 기록 ${logCount}건 · 수동 차감 ${manualCount}건</div>
+                </div>
+                <div class="profile-actions">
+                    <button type="button" class="item-edit" data-use-profile="${profile.id}">${isActive ? '기본' : '기본 설정'}</button>
+                    <button type="button" class="item-delete" data-delete-profile="${profile.id}">삭제</button>
+                </div>
+            </article>
+        `;
+    }).join('');
 }
 
 function getGoogleSyncConfig() {
@@ -420,6 +477,8 @@ function createGoogleSyncPayload() {
         version: 1,
         exportedAt: new Date().toISOString(),
         tracker: JSON.parse(JSON.stringify({
+            profiles: state.profiles,
+            activeProfileId: state.activeProfileId,
             doses: state.doses,
             cartridges: state.cartridges,
             logs: state.logs
@@ -441,6 +500,8 @@ function parseGoogleSyncPayload(input) {
         version: 1,
         exportedAt: candidate.exportedAt,
         tracker: {
+            profiles: Array.isArray(candidate.tracker.profiles) ? candidate.tracker.profiles : [],
+            activeProfileId: typeof candidate.tracker.activeProfileId === 'string' ? candidate.tracker.activeProfileId : '',
             doses: Array.isArray(candidate.tracker.doses) ? candidate.tracker.doses : [],
             cartridges: Array.isArray(candidate.tracker.cartridges) ? candidate.tracker.cartridges : [],
             logs: Array.isArray(candidate.tracker.logs) ? candidate.tracker.logs : []
@@ -491,14 +552,20 @@ async function downloadGoogleDriveSyncPayload(accessToken) {
 }
 
 function applyGoogleSyncPayload(payload) {
-    state.doses = Array.isArray(payload.tracker.doses) ? payload.tracker.doses : [];
+    state.profiles = normalizeProfiles(payload.tracker.profiles);
+    state.activeProfileId = normalizeProfileId(payload.tracker.activeProfileId || state.profiles[0]?.id || '');
+    state.doses = Array.isArray(payload.tracker.doses)
+        ? payload.tracker.doses.map(normalizeDose)
+        : [];
     state.cartridges = Array.isArray(payload.tracker.cartridges)
         ? payload.tracker.cartridges.map((cartridge) => ({
             ...cartridge,
             manualAdjustments: normalizeManualAdjustments(cartridge.manualAdjustments)
         }))
         : [];
-    state.logs = Array.isArray(payload.tracker.logs) ? payload.tracker.logs : [];
+    state.logs = Array.isArray(payload.tracker.logs)
+        ? payload.tracker.logs.map(normalizeLog)
+        : [];
     persistState();
     refreshAll();
 }
@@ -623,13 +690,13 @@ function switchTab(tabName) {
 
 function renderHome() {
     const now = new Date();
-    const concentration = getConcentrationAt(now);
+    const concentration = getConcentrationAt(now, state.activeProfileId);
     const lastDose = getLastDose();
-    const sideEffectCount = state.logs.filter((log) => log.type === 'side_effect').length;
-    const effectCount = state.logs.filter((log) => log.type === 'good_effect').length;
+    const sideEffectCount = state.logs.filter((log) => log.type === 'side_effect' && log.profileId === state.activeProfileId).length;
+    const effectCount = state.logs.filter((log) => log.type === 'good_effect' && log.profileId === state.activeProfileId).length;
 
     document.getElementById('home-concentration').textContent = concentration.toFixed(2);
-    document.getElementById('total-doses').textContent = state.doses.length;
+    document.getElementById('total-doses').textContent = state.doses.filter((dose) => dose.profileId === state.activeProfileId).length;
     document.getElementById('side-effect-count').textContent = sideEffectCount;
     document.getElementById('effect-count').textContent = effectCount;
 
@@ -680,6 +747,7 @@ function buildHomeInsight(lastDose, concentration, nextDate) {
         })()
         : '';
     const latestLogs = [...state.logs]
+        .filter((log) => log.profileId === state.activeProfileId)
         .sort((a, b) => new Date(b.datetime) - new Date(a.datetime))
         .slice(0, 1);
     const logText = latestLogs.length
@@ -688,7 +756,7 @@ function buildHomeInsight(lastDose, concentration, nextDate) {
 
     return `
         <div class="insight-row">
-            <span>마지막 용량</span>
+            <span>${escapeHtml(getProfileName(lastDose.profileId))} 마지막</span>
             <strong>${formatDose(lastDose.amount)}mg / ${formatMl(doseToMl(lastDose.amount))}mL · ${lastDose.site || '부위 미기록'}</strong>
         </div>
         <div class="insight-row">
@@ -728,6 +796,7 @@ function renderDoses() {
             : '첫 기록';
         const cartridge = dose.cartridgeId ? getCartridgeById(dose.cartridgeId) : null;
         const doseMl = doseToMl(dose.amount);
+        const profileName = getProfileName(dose.profileId);
 
         return `
             <article class="list-item">
@@ -737,7 +806,7 @@ function renderDoses() {
                         <span class="item-title">${formatDose(dose.amount)}mg</span>
                         <span class="status-badge">${formatMl(doseMl)}mL</span>
                     </div>
-                    <div class="item-meta">${intervalText} · ${dose.site || '부위 미기록'} · ${cartridge ? `${escapeHtml(cartridge.name)} 연결` : '카트리지 미연결'} · 당시 농도 ${getConcentrationAt(new Date(dose.datetime)).toFixed(2)}mg</div>
+                    <div class="item-meta">${escapeHtml(profileName)} · ${intervalText} · ${dose.site || '부위 미기록'} · ${cartridge ? `${escapeHtml(cartridge.name)} 연결` : '카트리지 미연결'} · 당시 농도 ${getConcentrationAt(new Date(dose.datetime), dose.profileId).toFixed(2)}mg</div>
                     ${dose.notes ? `<div class="item-notes">${escapeHtml(dose.notes)}</div>` : ''}
                 </div>
                 <div class="item-actions">
@@ -768,7 +837,8 @@ function renderLogs() {
     container.innerHTML = filtered.map((log) => {
         const typeClass = log.type.replace('_', '-');
         const logDate = new Date(log.datetime);
-        const concentration = getConcentrationAt(logDate);
+        const concentration = getConcentrationAt(logDate, log.profileId);
+        const profileName = getProfileName(log.profileId);
 
         return `
             <article class="list-item">
@@ -778,7 +848,7 @@ function renderLogs() {
                         <span class="tracking-type ${typeClass}">${getLogTypeLabel(log.type)}</span>
                         <span class="item-title">${escapeHtml(log.title)}</span>
                     </div>
-                    <div class="item-meta">강도 ${log.intensity}/5 · 당시 농도 ${concentration.toFixed(2)}mg</div>
+                    <div class="item-meta">${escapeHtml(profileName)} · 강도 ${log.intensity}/5 · 당시 농도 ${concentration.toFixed(2)}mg</div>
                     ${log.notes ? `<div class="item-notes">${escapeHtml(log.notes)}</div>` : ''}
                 </div>
                 <div class="item-actions">
@@ -797,15 +867,15 @@ function renderRangeSummary() {
         ['good_effect', '효능 좋음 평균 농도'],
         ['low_effect', '효과 적음 평균 농도']
     ].map(([type, label]) => {
-        const logs = state.logs.filter((log) => log.type === type);
+        const logs = state.logs.filter((log) => log.type === type && log.profileId === state.activeProfileId);
         if (!logs.length) {
             return { label, value: '-' };
         }
-        const avg = logs.reduce((sum, log) => sum + getConcentrationAt(new Date(log.datetime)), 0) / logs.length;
+        const avg = logs.reduce((sum, log) => sum + getConcentrationAt(new Date(log.datetime), log.profileId), 0) / logs.length;
         return { label, value: `${avg.toFixed(2)}mg · ${logs.length}건` };
     });
 
-    const current = getConcentrationAt(new Date()).toFixed(2);
+    const current = getConcentrationAt(new Date(), state.activeProfileId).toFixed(2);
     container.innerHTML = [
         { label: '현재 추정 농도', value: `${current}mg` },
         ...summaries
@@ -955,7 +1025,8 @@ function openDoseModal(dose = null, preferredCartridgeId = '') {
     document.getElementById('dose-id').value = dose?.id || '';
     document.getElementById('dose-modal-title').textContent = dose ? '투약 기록 수정' : '투약 기록 추가';
     document.getElementById('dose-date').value = dose ? toDateTimeInput(new Date(dose.datetime)) : toDateTimeInput(new Date());
-    document.getElementById('dose-site').value = dose?.site || '복부';
+    renderProfileOptions('dose-profile', dose?.profileId || state.activeProfileId);
+    document.getElementById('dose-site').value = dose?.site || '오른쪽 복부';
     document.getElementById('dose-notes').value = dose?.notes || '';
 
     if (dose && WEGOVY_DOSES.includes(Number(dose.amount))) {
@@ -1005,6 +1076,7 @@ function saveDoseFromForm(event) {
     const dose = {
         id,
         datetime: new Date(document.getElementById('dose-date').value).toISOString(),
+        profileId: normalizeProfileId(document.getElementById('dose-profile').value),
         amount,
         cartridgeId,
         site: document.getElementById('dose-site').value,
@@ -1041,6 +1113,7 @@ function openBulkModal() {
     document.getElementById('bulk-form').reset();
     document.getElementById('bulk-start-date').value = toDateInput(new Date());
     document.getElementById('bulk-time').value = '09:00';
+    renderProfileOptions('bulk-profile', state.activeProfileId);
     document.getElementById('bulk-weeks').value = '16';
     updateBulkPreview();
     openModal('bulk-modal');
@@ -1069,6 +1142,7 @@ function saveBulkDoses(event) {
     const startDate = document.getElementById('bulk-start-date').value;
     const time = document.getElementById('bulk-time').value;
     const weeks = Number(document.getElementById('bulk-weeks').value);
+    const profileId = normalizeProfileId(document.getElementById('bulk-profile').value);
     const created = [];
 
     for (let i = 0; i < weeks; i += 1) {
@@ -1077,16 +1151,19 @@ function saveBulkDoses(event) {
         const amount = doseForWeek(i);
         const alreadyExists = state.doses.some((dose) => {
             const existing = new Date(dose.datetime);
-            return Math.abs(existing - date) < 60 * 60 * 1000 && Number(dose.amount) === amount;
+            return dose.profileId === profileId
+                && Math.abs(existing - date) < 60 * 60 * 1000
+                && Number(dose.amount) === amount;
         });
 
         if (!alreadyExists) {
             created.push({
                 id: createId(),
                 datetime: date.toISOString(),
+                profileId,
                 amount,
                 cartridgeId: '',
-                site: i % 2 ? '오른쪽 허벅지' : '복부',
+                site: i % 2 ? '오른쪽 허벅지' : '오른쪽 복부',
                 notes: '표준 증량 스케줄로 입력'
             });
         }
@@ -1109,7 +1186,7 @@ function openCartridgeModal(cartridge = null) {
     document.getElementById('cartridge-adjust-id').value = cartridge?.id || '';
     document.getElementById('cartridge-adjust-datetime').value = toDateTimeInput(new Date());
     document.getElementById('cartridge-adjust-ml').value = '';
-    document.getElementById('cartridge-adjust-user').value = '';
+    renderProfileOptions('cartridge-adjust-profile', state.activeProfileId);
     document.getElementById('cartridge-adjust-note').value = '';
 
     const adjustSection = document.getElementById('cartridge-adjust-section');
@@ -1177,9 +1254,10 @@ function saveCartridgeAdjustmentFromForm(event) {
     const adjustment = {
         id: createId(),
         datetime: new Date(document.getElementById('cartridge-adjust-datetime').value).toISOString(),
+        profileId: normalizeProfileId(document.getElementById('cartridge-adjust-profile').value),
         amountMl,
         amountMg: amountMl * MG_PER_ML,
-        userName: document.getElementById('cartridge-adjust-user').value.trim(),
+        userName: getProfileName(document.getElementById('cartridge-adjust-profile').value),
         note: document.getElementById('cartridge-adjust-note').value.trim()
     };
 
@@ -1188,7 +1266,7 @@ function saveCartridgeAdjustmentFromForm(event) {
 
     persistState();
     document.getElementById('cartridge-adjust-ml').value = '';
-    document.getElementById('cartridge-adjust-user').value = '';
+    renderProfileOptions('cartridge-adjust-profile', state.activeProfileId);
     document.getElementById('cartridge-adjust-note').value = '';
     document.getElementById('cartridge-adjust-datetime').value = toDateTimeInput(new Date());
     updateCartridgeAdjustmentPreview(cartridge.id);
@@ -1251,7 +1329,8 @@ function updateCartridgeAdjustmentPreview(forcedCartridgeId = '') {
 
     const usage = getCartridgeUsage(cartridge);
     const amountMl = Number(document.getElementById('cartridge-adjust-ml').value);
-    const userName = document.getElementById('cartridge-adjust-user').value.trim();
+    const profileId = normalizeProfileId(document.getElementById('cartridge-adjust-profile').value);
+    const userName = getProfileName(profileId);
 
     summary.innerHTML = [
         `${escapeHtml(cartridge.name)} 현재 잔량`,
@@ -1329,6 +1408,7 @@ function openLogModal(type = 'side_effect', log = null) {
     document.getElementById('log-id').value = log?.id || '';
     document.getElementById('log-type').value = log?.type || type;
     document.getElementById('log-date').value = log ? toDateTimeInput(new Date(log.datetime)) : toDateTimeInput(new Date());
+    renderProfileOptions('log-profile', log?.profileId || state.activeProfileId);
     document.getElementById('log-title').value = log?.title || '';
     document.getElementById('log-intensity').value = log?.intensity || 3;
     document.getElementById('log-intensity-label').textContent = log?.intensity || 3;
@@ -1345,6 +1425,7 @@ function saveLogFromForm(event) {
         id,
         type: document.getElementById('log-type').value,
         datetime: new Date(document.getElementById('log-date').value).toISOString(),
+        profileId: normalizeProfileId(document.getElementById('log-profile').value),
         title: document.getElementById('log-title').value.trim(),
         intensity: Number(document.getElementById('log-intensity').value),
         notes: document.getElementById('log-notes').value.trim()
@@ -1376,9 +1457,11 @@ function deleteLog(id) {
     showToast('기록을 삭제했습니다');
 }
 
-function getConcentrationAt(date) {
+function getConcentrationAt(date, profileId = state.activeProfileId) {
     const targetTime = date.getTime();
+    const normalizedProfileId = normalizeProfileId(profileId);
     return state.doses.reduce((total, dose) => {
+        if (dose.profileId !== normalizedProfileId) return total;
         const doseTime = new Date(dose.datetime).getTime();
         if (Number.isNaN(doseTime) || doseTime > targetTime) return total;
         const elapsed = targetTime - doseTime;
@@ -1391,13 +1474,13 @@ function updateChart() {
     if (!canvas || !window.Chart) return;
 
     const data = buildChartData();
-    const dosePoints = getSortedDoses('asc').map((dose) => ({
+    const dosePoints = getSortedDoses('asc', state.activeProfileId).map((dose) => ({
         x: new Date(dose.datetime),
-        y: getConcentrationAt(new Date(dose.datetime))
+        y: getConcentrationAt(new Date(dose.datetime), dose.profileId)
     }));
-    const logPoints = state.logs.map((log) => ({
+    const logPoints = state.logs.filter((log) => log.profileId === state.activeProfileId).map((log) => ({
         x: new Date(log.datetime),
-        y: getConcentrationAt(new Date(log.datetime)),
+        y: getConcentrationAt(new Date(log.datetime), log.profileId),
         log
     }));
 
@@ -1484,7 +1567,8 @@ function updateChart() {
 }
 
 function buildChartData() {
-    if (!state.doses.length) {
+    const profileDoses = getSortedDoses('asc', state.activeProfileId);
+    if (!profileDoses.length) {
         const now = new Date();
         return [
             { x: addDays(now, -7), y: 0 },
@@ -1493,7 +1577,7 @@ function buildChartData() {
         ];
     }
 
-    const sorted = getSortedDoses('asc');
+    const sorted = profileDoses;
     const first = addDays(new Date(sorted[0].datetime), -1);
     const lastDose = new Date(sorted[sorted.length - 1].datetime);
     const end = addDays(new Date(Math.max(Date.now(), lastDose.getTime())), 21);
@@ -1501,7 +1585,7 @@ function buildChartData() {
     const cursor = new Date(first);
 
     while (cursor <= end) {
-        points.push({ x: new Date(cursor), y: getConcentrationAt(cursor) });
+        points.push({ x: new Date(cursor), y: getConcentrationAt(cursor, state.activeProfileId) });
         cursor.setHours(cursor.getHours() + 12);
     }
 
@@ -1511,40 +1595,42 @@ function buildChartData() {
 function exportJson() {
     downloadFile(
         `wegovy-tracker-${toDateInput(new Date())}.json`,
-        JSON.stringify({ doses: state.doses, cartridges: state.cartridges, logs: state.logs }, null, 2),
+        JSON.stringify({ profiles: state.profiles, activeProfileId: state.activeProfileId, doses: state.doses, cartridges: state.cartridges, logs: state.logs }, null, 2),
         'application/json'
     );
 }
 
 function exportCsv() {
     const rows = [
-        ['type', 'datetime', 'amount_or_title', 'volume_ml', 'cartridge', 'detail', 'intensity', 'concentration_mg']
+        ['type', 'profile', 'datetime', 'amount_or_title', 'volume_ml', 'cartridge', 'detail', 'intensity', 'concentration_mg']
     ];
 
     getSortedDoses('asc').forEach((dose) => {
         const cartridge = dose.cartridgeId ? getCartridgeById(dose.cartridgeId) : null;
         rows.push([
             'dose',
+            getProfileName(dose.profileId),
             dose.datetime,
             `${dose.amount}mg`,
             formatMl(doseToMl(dose.amount)),
             cartridge ? cartridge.name : '',
             `${dose.site || ''} ${dose.notes || ''}`.trim(),
             '',
-            getConcentrationAt(new Date(dose.datetime)).toFixed(2)
+            getConcentrationAt(new Date(dose.datetime), dose.profileId).toFixed(2)
         ]);
     });
 
     getSortedLogs('asc').forEach((log) => {
         rows.push([
             log.type,
+            getProfileName(log.profileId),
             log.datetime,
             log.title,
             '',
             '',
             log.notes || '',
             log.intensity,
-            getConcentrationAt(new Date(log.datetime)).toFixed(2)
+            getConcentrationAt(new Date(log.datetime), log.profileId).toFixed(2)
         ]);
     });
 
@@ -1555,6 +1641,7 @@ function exportCsv() {
             .forEach((adjustment) => {
                 rows.push([
                     'cartridge_adjustment',
+                    getProfileName(adjustment.profileId),
                     adjustment.datetime,
                     `${formatDose(adjustment.amountMg || (Number(adjustment.amountMl || 0) * MG_PER_ML))}mg`,
                     formatMl(adjustment.amountMl || 0),
@@ -1581,6 +1668,7 @@ function seedDemoData() {
     const now = new Date();
     const start = addDays(now, -42);
     const demoCartridgeId = createId();
+    const demoProfileId = state.activeProfileId;
     const newDoses = [];
 
     for (let i = 0; i < 7; i += 1) {
@@ -1589,6 +1677,7 @@ function seedDemoData() {
         newDoses.push({
             id: createId(),
             datetime: date.toISOString(),
+            profileId: demoProfileId,
             amount: doseForWeek(i),
             cartridgeId: demoCartridgeId,
             site: i % 2 ? '오른쪽 허벅지' : '왼쪽 허벅지',
@@ -1608,6 +1697,7 @@ function seedDemoData() {
         {
             id: createId(),
             type: 'good_effect',
+            profileId: demoProfileId,
             datetime: addDays(now, -29).toISOString(),
             title: '식욕 감소',
             intensity: 4,
@@ -1616,6 +1706,7 @@ function seedDemoData() {
         {
             id: createId(),
             type: 'side_effect',
+            profileId: demoProfileId,
             datetime: addDays(now, -20).toISOString(),
             title: '메스꺼움',
             intensity: 3,
@@ -1624,6 +1715,7 @@ function seedDemoData() {
         {
             id: createId(),
             type: 'low_effect',
+            profileId: demoProfileId,
             datetime: addDays(now, -7).toISOString(),
             title: '야식 생각',
             intensity: 2,
@@ -1643,6 +1735,8 @@ function resetData() {
     state.doses = [];
     state.cartridges = [];
     state.logs = [];
+    state.profiles = normalizeProfiles();
+    state.activeProfileId = state.profiles[0].id;
     persistState();
     refreshAll();
     showToast('전체 데이터를 삭제했습니다');
@@ -1677,11 +1771,14 @@ function setDefaultDates() {
 }
 
 function getLastDose() {
-    return getSortedDoses()[0] || null;
+    return getSortedDoses('desc', state.activeProfileId)[0] || null;
 }
 
-function getSortedDoses(direction = 'desc') {
-    return [...state.doses].sort((a, b) => {
+function getSortedDoses(direction = 'desc', profileId = '') {
+    const doses = profileId
+        ? state.doses.filter((dose) => dose.profileId === normalizeProfileId(profileId))
+        : state.doses;
+    return [...doses].sort((a, b) => {
         const delta = new Date(a.datetime) - new Date(b.datetime);
         return direction === 'asc' ? delta : -delta;
     });
@@ -1695,7 +1792,7 @@ function getSortedLogs(direction = 'desc') {
 }
 
 function getLikelyNextDose() {
-    const count = state.doses.length;
+    const count = state.doses.filter((dose) => dose.profileId === state.activeProfileId).length;
     return String(doseForWeek(count));
 }
 
@@ -1713,13 +1810,161 @@ function doseForWeek(weekIndex) {
     return 2.4;
 }
 
+function normalizeProfiles(profiles = [], source = {}) {
+    const normalized = Array.isArray(profiles)
+        ? profiles
+            .map((profile) => ({
+                id: typeof profile.id === 'string' && profile.id.trim() ? profile.id : createId(),
+                name: typeof profile.name === 'string' ? profile.name.trim() : ''
+            }))
+            .filter((profile) => profile.name)
+        : [];
+
+    if (Array.isArray(source.cartridges)) {
+        source.cartridges.forEach((cartridge) => {
+            normalizeManualAdjustmentsForProfileSeed(cartridge.manualAdjustments).forEach((adjustment) => {
+                if (adjustment.userName && !normalized.some((profile) => profile.name === adjustment.userName)) {
+                    normalized.push({ id: createId(), name: adjustment.userName });
+                }
+            });
+        });
+    }
+
+    if (!normalized.length) {
+        return DEFAULT_PROFILES.map((profile) => ({ ...profile }));
+    }
+
+    return normalized;
+}
+
+function normalizeProfileId(profileId = '') {
+    if (state.profiles.some((profile) => profile.id === profileId)) {
+        return profileId;
+    }
+    return state.profiles[0]?.id || DEFAULT_PROFILES[0].id;
+}
+
+function getProfileIdByName(name = '') {
+    const normalizedName = String(name).trim();
+    return state.profiles.find((profile) => profile.name === normalizedName)?.id || '';
+}
+
+function normalizeDose(dose) {
+    return {
+        ...dose,
+        profileId: normalizeProfileId(dose?.profileId || '')
+    };
+}
+
+function normalizeLog(log) {
+    return {
+        ...log,
+        profileId: normalizeProfileId(log?.profileId || '')
+    };
+}
+
 function normalizeManualAdjustments(manualAdjustments) {
     return Array.isArray(manualAdjustments)
-        ? manualAdjustments.map((adjustment) => ({
-            ...adjustment,
-            userName: typeof adjustment.userName === 'string' ? adjustment.userName : ''
-        }))
+        ? manualAdjustments.map((adjustment) => {
+            const profileId = normalizeProfileId(adjustment.profileId || getProfileIdByName(adjustment.userName));
+            return {
+                ...adjustment,
+                profileId,
+                userName: typeof adjustment.userName === 'string' && adjustment.userName.trim()
+                    ? adjustment.userName.trim()
+                    : getProfileName(profileId)
+            };
+        })
         : [];
+}
+
+function normalizeManualAdjustmentsForProfileSeed(manualAdjustments) {
+    return Array.isArray(manualAdjustments)
+        ? manualAdjustments.map((adjustment) => ({
+            userName: typeof adjustment.userName === 'string' ? adjustment.userName.trim() : ''
+        })).filter((adjustment) => adjustment.userName)
+        : [];
+}
+
+function getProfileById(profileId) {
+    return state.profiles.find((profile) => profile.id === profileId) || null;
+}
+
+function getProfileName(profileId) {
+    return getProfileById(normalizeProfileId(profileId))?.name || '미지정';
+}
+
+function renderProfileOptions(selectId, selectedId = '') {
+    const select = document.getElementById(selectId);
+    if (!select) return;
+
+    const currentId = normalizeProfileId(selectedId || state.activeProfileId);
+    select.innerHTML = state.profiles.map((profile) => (
+        `<option value="${profile.id}"${profile.id === currentId ? ' selected' : ''}>${escapeHtml(profile.name)}</option>`
+    )).join('');
+}
+
+function saveProfileFromForm(event) {
+    event.preventDefault();
+
+    const input = document.getElementById('profile-name');
+    const name = input.value.trim();
+    if (!name) {
+        showToast('프로필 이름을 입력하세요');
+        return;
+    }
+
+    if (state.profiles.some((profile) => profile.name === name)) {
+        showToast('이미 있는 프로필 이름입니다');
+        return;
+    }
+
+    const profile = { id: createId(), name };
+    state.profiles.push(profile);
+    state.activeProfileId = profile.id;
+    input.value = '';
+    persistState();
+    refreshAll();
+    showToast(`${name} 프로필을 추가했습니다`);
+}
+
+function setActiveProfile(profileId) {
+    state.activeProfileId = normalizeProfileId(profileId);
+    persistState();
+    refreshAll();
+    showToast(`${getProfileName(state.activeProfileId)} 기준으로 표시합니다`);
+}
+
+function deleteProfile(profileId) {
+    const normalizedId = normalizeProfileId(profileId);
+    if (state.profiles.length <= 1) {
+        showToast('프로필은 최소 1개가 필요합니다');
+        return;
+    }
+
+    const profileName = getProfileName(normalizedId);
+    const fallbackId = state.profiles.find((profile) => profile.id !== normalizedId)?.id || state.profiles[0].id;
+    if (!confirm(`${profileName} 프로필을 삭제하고 기존 기록은 ${getProfileName(fallbackId)} 프로필로 옮길까요?`)) return;
+
+    state.doses = state.doses.map((dose) => (
+        dose.profileId === normalizedId ? { ...dose, profileId: fallbackId } : dose
+    ));
+    state.logs = state.logs.map((log) => (
+        log.profileId === normalizedId ? { ...log, profileId: fallbackId } : log
+    ));
+    state.cartridges = state.cartridges.map((cartridge) => ({
+        ...cartridge,
+        manualAdjustments: normalizeManualAdjustments(cartridge.manualAdjustments).map((adjustment) => (
+            adjustment.profileId === normalizedId
+                ? { ...adjustment, profileId: fallbackId, userName: getProfileName(fallbackId) }
+                : adjustment
+        ))
+    }));
+    state.profiles = state.profiles.filter((profile) => profile.id !== normalizedId);
+    state.activeProfileId = normalizeProfileId(state.activeProfileId === normalizedId ? fallbackId : state.activeProfileId);
+    persistState();
+    refreshAll();
+    showToast(`${profileName} 프로필을 삭제했습니다`);
 }
 
 function getLogTypeLabel(type) {
