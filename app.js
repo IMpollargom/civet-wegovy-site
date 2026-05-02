@@ -793,8 +793,8 @@ function renderDoses() {
         return;
     }
 
-    container.innerHTML = doses.map((dose, index) => {
-        const previous = doses[index + 1];
+    container.innerHTML = doses.map((dose) => {
+        const previous = getPreviousDoseForProfile(dose);
         const intervalText = previous
             ? `${Math.round((new Date(dose.datetime) - new Date(previous.datetime)) / (24 * 60 * 60 * 1000))}일 간격`
             : '첫 기록';
@@ -1786,6 +1786,17 @@ function getSortedDoses(direction = 'desc', profileId = '') {
         const delta = new Date(a.datetime) - new Date(b.datetime);
         return direction === 'asc' ? delta : -delta;
     });
+}
+
+function getPreviousDoseForProfile(dose) {
+    const doseTime = new Date(dose.datetime).getTime();
+    if (Number.isNaN(doseTime)) return null;
+
+    return getSortedDoses('desc', dose.profileId).find((candidate) => {
+        if (candidate.id === dose.id) return false;
+        const candidateTime = new Date(candidate.datetime).getTime();
+        return !Number.isNaN(candidateTime) && candidateTime < doseTime;
+    }) || null;
 }
 
 function getSortedLogs(direction = 'desc') {
